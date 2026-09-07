@@ -27,7 +27,9 @@ test('正文可手动生成和批量更新梗概，并保护未保存编辑', as
     await expect(page.getByRole('button', { name: '生成本章梗概', exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: '批量更新章节梗概' })).toBeDisabled()
     await editor.fill(chapter.current_content)
-    await page.route(`**/books/${book.id}/chapter-summaries`, route => route.fulfill({ json: { book_id: book.id, total: 1, updated: 0, skipped: 1, failed: 0, results: [{ chapter_id: chapter.id, status: 'skipped', updated: false, skipped: true, message: '正文未变化', chapter: summary }] } }))
+    const job = { id: 999, book_id: book.id, status: 'completed', model: '测试模型', total: 1, updated: 0, skipped: 1, failed: 0, items: [] }
+    await page.route(`**/books/${book.id}/summary-jobs`, route => route.fulfill({ json: job }))
+    await page.route(`**/books/${book.id}/summary-jobs/latest`, route => route.fulfill({ json: job }))
     await page.getByRole('button', { name: '批量更新章节梗概' }).click()
     await expect(page.getByText('梗概更新：成功 0 章，跳过 1 章，失败 0 章')).toBeVisible()
     await page.unroute(`**/chapters/${chapter.id}/summary`)

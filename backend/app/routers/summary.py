@@ -5,12 +5,13 @@ from datetime import datetime
 import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..llm_errors import llm_http_error
-from ..models import Chapter, LLMProvider
+from ..models import Chapter, LLMProvider, SummaryLease
 from ..schemas import ChapterOut
 from ..services import content_sha256, serialize_chapter
 from .core import require_book, require_chapter
@@ -101,7 +102,23 @@ async def generate_summary(provider: LLMProvider, title: str, content: str) -> s
         return normalize_summary(raw)
 
 
-async def update_summary(chapter_id: int, db: Session, *, skip_unchanged: bool = False) -> SummaryResult:
+async def update_summary(chapter_id: int, db: Session, *, skip_unchanged: bool = False, provider_id: int | None = None, config: dict | None = None) -> SummaryResult:
+    require_chapter(db, chapter_id)
+    db.add(SummaryLease(chapter_id=chapter_id))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return SummaryResult(chapter_id=chapter_id, status="failed", updated=False, skipped=False, message="本章正在生成梗概，请等待当前任务完成。")
+    try:
+        return await _update_summary(chapter_id, db, skip_unchanged=skip_unchanged, provider_id=provider_id, config=config)
+    finally:
+        db.rollback()
+        db.execute(delete(SummaryLease).where(SummaryLease.chapter_id == chapter_id))
+        db.commit()
+
+
+async def _update_summary(chapter_id: int, db: Session, *, skip_unchanged: bool = False, provider_id: int | None = None, config: dict | None = None) -> SummaryResult:
     chapter = require_chapter(db, chapter_id)
     snapshot = serialize_chapter(chapter, db)
 
@@ -118,9 +135,11 @@ async def update_summary(chapter_id: int, db: Session, *, skip_unchanged: bool =
         return result("skipped", "本章没有正文，已跳过。")
     if skip_unchanged and chapter.summary and chapter.summary_content_sha256 == sha:
         return result("skipped", "正文未变化，保留已有梗概。")
-    provider = summary_provider(db)
-    if not provider:
+    provider = db.get(LLMProvider, provider_id) if provider_id is not None else summary_provider(db)
+    if not provider or not provider.enabled or not provider.api_key:
         return result("failed", "请先在 LLM 配置中保存 API Key 并启用一个模型。")
+    if config:
+        provider = LLMProvider(**config, api_key=provider.api_key)
     model = provider.model
     # Release the read transaction during the network call so concurrent saves remain usable.
     db.commit()

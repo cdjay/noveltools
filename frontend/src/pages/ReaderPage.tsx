@@ -4,8 +4,9 @@ import { diff_match_patch } from 'diff-match-patch'
 import { api, upload } from '../api/client'
 import { useAppStore } from '../stores/useAppStore'
 import { useUiPrefs } from '../stores/useUiPrefs'
-import type { Chapter, Version, SummaryResult, SummaryBatchResult } from '../types'
+import type { Chapter, Version, SummaryResult } from '../types'
 import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, MetaText, Modal, Panel, SectionTitle, Select, StatusBadge, Textarea, toast } from '../lib/ui'
+import { SummaryTaskPanel } from '../lib/SummaryTaskPanel'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
 
 function countWords(text: string) { return text.replace(/\s/g, '').length }
@@ -207,17 +208,12 @@ export function ReaderPage() {
     } catch (exc) { setError(String(exc)); toast('梗概生成失败，已有内容保留', 'danger') }
     finally { setSummarizing(false) }
   }
-  const generateBookSummaries = async () => {
-    if (!currentBook || dirty || saving || summarizing || batchSummarizing) return
-    setBatchSummarizing(true); setError('')
+  const refreshSummaries = async () => {
+    if (!currentBook) return
     try {
-      const result = await api<SummaryBatchResult>(`/books/${currentBook.id}/chapter-summaries`, { method: 'POST' })
-      mergeSummaries(result.results)
-      const report = `梗概更新：成功 ${result.updated} 章，跳过 ${result.skipped} 章，失败 ${result.failed} 章`
-      toast(report, result.failed ? 'danger' : 'ok')
-      if (result.failed) setError(`${report}。${result.results.filter(item => item.status === 'failed').map(item => `${item.chapter?.title || '章节'}：${item.message}`).join('；')}`)
-    } catch (exc) { setError(String(exc)); toast('批量梗概更新失败，已完成的结果已保留', 'danger') }
-    finally { setBatchSummarizing(false) }
+      const fresh = await api<Chapter[]>(`/books/${currentBook.id}/chapters?include_content=false`)
+      mergeSummaries(fresh.map(chapter => ({ chapter_id: chapter.id, status: 'completed', updated: true, skipped: false, message: '', chapter })))
+    } catch { /* The task panel reports connection errors and retries. */ }
   }
   const [diffVersions, setDiffVersions] = useState<{ left: { content: string }; right: { content: string } } | null>(null)
   useEffect(() => {
@@ -271,7 +267,7 @@ export function ReaderPage() {
         })}
       </div>
       <div className="border-t border-line-soft p-2.5">
-        <Button variant="ghost" size="sm" className="w-full" disabled={dirty || saving || summarizing || batchSummarizing} title="按已保存正文生成梗概，已有梗概且正文未变化的章节会跳过" onClick={() => void generateBookSummaries()}>{batchSummarizing ? '批量生成中…' : '批量更新章节梗概'}</Button>
+        {currentBook && <SummaryTaskPanel bookId={currentBook.id} disabled={dirty || saving || summarizing} onBusy={setBatchSummarizing} onProgress={() => void refreshSummaries()} />}
         <Button variant="ghost" size="sm" className="mt-1 w-full" onClick={() => fileInput.current?.click()}><Upload size={13} />导入 TXT / Markdown</Button>
       </div>
     </aside>}

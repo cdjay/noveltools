@@ -62,6 +62,34 @@ class ChapterVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class SummaryJob(Base):
+    __tablename__ = "summary_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="queued")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    provider_id: Mapped[int | None] = mapped_column(nullable=True)
+    provider_config: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class SummaryJobItem(Base):
+    __tablename__ = "summary_job_items"
+    __table_args__ = (UniqueConstraint("job_id", "chapter_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("summary_jobs.id", ondelete="CASCADE"), index=True)
+    chapter_id: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    message: Mapped[str] = mapped_column(Text, default="")
+
+
+class SummaryLease(Base):
+    __tablename__ = "summary_leases"
+    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), primary_key=True)
+
+
 class KnowledgeItem(Base):
     __tablename__ = "knowledge_items"
     id: Mapped[int] = mapped_column(primary_key=True)
