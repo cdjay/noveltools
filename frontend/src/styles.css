@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", system-ui, sans-serif;
+  color: #2b2822;
+  background: #faf8f4;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body { margin: 0; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+/* 统一可见焦点：键盘操作时清晰，鼠标点击不打扰 */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid #476e71;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection { background: #dde8e8; }
+
+/* 正文排版：宋体系、从容的行高与段落间距 */
+.paper-text {
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, "SimSun", serif;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 2.05;
+  letter-spacing: 0.02em;
+  color: #33302a;
+}
+.paper-text::placeholder { color: #b5ae9d; }
+
+/* 细滚动条 */
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #d5cfbd; border-radius: 999px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #b8b09a; }
+
+/* 短促克制的状态反馈动效 */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slide-in-right { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+.anim-fade { animation: fade-in 120ms ease-out; }
+.anim-rise { animation: rise-in 140ms ease-out; }
+.anim-slide-right { animation: slide-in-right 140ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-fade, .anim-rise, .anim-slide-right { animation: none; }
+  * { transition-duration: 0.01ms !important; }
+}
+

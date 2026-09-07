@@ -1,0 +1,41 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+.env
+data/*.db
+data/books/
+data/analysis/
+data/exports/
+test_data/
+test_noveltools.db
+backend/migration_scratch.db
+frontend/test-results/
+frontend/playwright-report/
+.runtime/
+data/logs/
+
+# Local secrets and environment overrides
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# Local novels, databases, and SQLite sidecar files
+/data/
+/backend/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Generated frontend build metadata and visual review captures
+*.tsbuildinfo
+/frontend/vite.config.js
+/frontend/vite.config.d.ts
+/design-review/
