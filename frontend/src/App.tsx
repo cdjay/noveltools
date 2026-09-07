@@ -9,6 +9,7 @@ import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, Loading,
 import { ReaderPage } from './pages/ReaderPage'
 import { OutlinePage } from './pages/OutlinePage'
 import { SettingsPage } from './pages/SettingsPage'
+import { RestoreBackup } from './lib/RestoreBackup'
 
 const bookStatusLabel: Record<string, string> = { draft: '草稿', ongoing: '连载', completed: '已完成' }
 const bookStatusTone = (status: string) => status === 'completed' ? 'ok' as const : status === 'ongoing' ? 'accent' as const : 'neutral' as const
@@ -86,7 +87,7 @@ function LibraryPage() {
             <div className="text-meta text-ink-faint">专注正文与大纲 · 内容保存在本机</div>
           </div>
         </div>
-        <Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true) }}><FilePlus2 size={15} />新建书籍</Button>
+        <div className="flex gap-2"><RestoreBackup onRestored={book => setBooks([book, ...useAppStore.getState().books])} /><Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true) }}><FilePlus2 size={15} />新建书籍</Button></div>
       </div>
     </header>
     <main className="mx-auto max-w-6xl px-6 py-8 lg:px-10">
@@ -197,7 +198,7 @@ function WorkspaceLayout() {
         <button onClick={toggleNav} title={navCollapsed ? '展开导航' : '收起导航'} className="flex w-full items-center justify-center gap-2 rounded-md px-2 py-1.5 text-meta text-ink-faint transition-colors hover:bg-paper-sunken hover:text-ink">
           {navCollapsed ? <PanelLeftOpen size={15} /> : <><PanelLeftClose size={15} />收起导航</>}
         </button>
-        {!navCollapsed && <div className="px-2 pb-1 pt-0.5 text-center text-[11px] text-ink-faint/70">本地模式 · 数据不出本机</div>}
+        {!navCollapsed && <div className="px-2 pb-1 pt-0.5 text-center text-[11px] text-ink-faint/70">本地保存 · 梗概发送至所选模型</div>}
       </div>
     </aside>
     <main className="flex min-w-0 flex-1 flex-col">
@@ -208,6 +209,7 @@ function WorkspaceLayout() {
           <span className="shrink-0 text-ink-soft">{activeLabel}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <a href={`${API_BASE}/books/${bookId}/backup`} className="text-meta text-ink-faint transition-colors hover:text-accent-700" download>备份书籍</a>
           <a href={`${API_BASE}/books/${bookId}/export.txt`} className="text-meta text-ink-faint transition-colors hover:text-accent-700" download>导出 TXT</a>
         </div>
       </header>

@@ -10,6 +10,7 @@ from .routers.outline import router as outline_router
 from .routers.summary import router as summary_router
 from .outline_history import migrate_legacy_outlines
 from .routers.summary_jobs import router as jobs_router, worker, recover_interrupted
+from .routers.backups import router as backups_router
 
 Base.metadata.create_all(bind=engine)
 ensure_schema()
@@ -31,3 +32,4 @@ app.include_router(router)
 app.include_router(outline_router)
 app.include_router(summary_router)
 app.include_router(jobs_router)
+app.include_router(backups_router)

@@ -1,0 +1,149 @@
+"""Portable book archives, restored as a new book in one transaction."""
+from datetime import datetime
+from typing import Literal
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel, Field, ValidationError, model_validator
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..models import Book, Chapter, ChapterVersion, OutlineTextVersion
+from ..schemas import BookCreate, BookOut
+from ..services import count_words, read_content, serialize_book
+from .core import require_book
+
+router = APIRouter(prefix="/api")
+
+
+class SavedVersion(BaseModel):
+    id: int
+    version_number: int = Field(ge=1)
+    content: str
+    source: str
+    note: str
+    created_at: datetime
+
+
+class SavedChapter(BaseModel):
+    id: int
+    chapter_number: int = Field(ge=1)
+    title: str
+    status: str
+    current_version_id: int | None
+    reading_position: int = Field(ge=0)
+    summary: str
+    summary_content_sha256: str
+    summary_source_version_id: int | None
+    summary_model: str
+    summary_updated_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    versions: list[SavedVersion]
+
+
+class BookArchive(BaseModel):
+    format: Literal["noveltools-book"] = "noveltools-book"
+    schema_version: Literal[1] = 1
+    book: BookCreate
+    created_at: datetime
+    updated_at: datetime
+    current_chapter_id: int | None
+    chapters: list[SavedChapter] = Field(max_length=10000)
+    outlines: list[SavedVersion]
+
+    @model_validator(mode="after")
+    def valid_references(self):
+        def unique(values):
+            if len(values) != len(set(values)):
+                raise ValueError("备份包含重复编号")
+        unique([c.id for c in self.chapters])
+        unique([c.chapter_number for c in self.chapters])
+        unique([o.version_number for o in self.outlines])
+        if self.current_chapter_id is not None and self.current_chapter_id not in {c.id for c in self.chapters}:
+            raise ValueError("当前章节引用无效")
+        for chapter in self.chapters:
+            unique([v.id for v in chapter.versions])
+            unique([v.version_number for v in chapter.versions])
+            ids = {v.id for v in chapter.versions}
+            if chapter.current_version_id not in ids:
+                raise ValueError("当前正文版本引用无效")
+            if chapter.summary_source_version_id is not None and chapter.summary_source_version_id not in ids:
+                raise ValueError("梗概来源版本引用无效")
+        return self
+
+
+def version_out(version, content):
+    return {key: getattr(version, key) for key in ('id', 'version_number', 'source', 'note', 'created_at')} | {'content': content}
+
+
+@router.get("/books/{book_id}/backup")
+def export_backup(book_id: int, db: Session = Depends(get_db)):
+    # A consistent snapshot includes all version pointers and text, even during edits.
+    db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    book = require_book(db, book_id)
+    chapters = db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.chapter_number)).all()
+    saved = []
+    for chapter in chapters:
+        versions = db.scalars(select(ChapterVersion).where(ChapterVersion.chapter_id == chapter.id).order_by(ChapterVersion.version_number)).all()
+        saved.append({key: getattr(chapter, key) for key in SavedChapter.model_fields if key != 'versions'} |
+                     {'versions': [version_out(v, read_content(v)) for v in versions]})
+    outlines = db.scalars(select(OutlineTextVersion).where(OutlineTextVersion.book_id == book_id).order_by(OutlineTextVersion.version_number)).all()
+    try:
+        archive = BookArchive(book=BookCreate.model_validate({key: getattr(book, key) for key in BookCreate.model_fields}),
+            created_at=book.created_at, updated_at=book.updated_at,
+            current_chapter_id=book.current_chapter_id if book.current_chapter_id in {c.id for c in chapters} else None,
+            chapters=saved, outlines=[version_out(o, o.content) for o in outlines])
+    except ValidationError:
+        raise HTTPException(409, "书籍的版本引用不完整，请先修复数据后备份。")
+    return Response(archive.model_dump_json(indent=2), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="noveltools-book-{book_id}.json"'})
+
+
+async def parse_archive(file):
+    raw = await file.read(200 * 1024 * 1024 + 1)
+    if len(raw) > 200 * 1024 * 1024:
+        raise HTTPException(400, "备份超过 200 MB，无法在界面恢复。")
+    try:
+        return BookArchive.model_validate_json(raw)
+    except (ValidationError, ValueError):
+        raise HTTPException(400, "备份格式、版本或内容引用无效。未写入任何书籍内容。")
+
+
+@router.post("/backups/preview")
+async def preview_backup(file: UploadFile = File(...)):
+    archive = await parse_archive(file)
+    return {"title": archive.book.title, "chapters": len(archive.chapters),
+            "versions": sum(len(c.versions) for c in archive.chapters), "outlines": len(archive.outlines)}
+
+
+@router.post("/backups/restore", response_model=BookOut)
+async def restore_backup(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    archive = await parse_archive(file)
+    book = Book(**archive.book.model_dump(), created_at=archive.created_at, updated_at=archive.updated_at)
+    book.title += "（恢复副本）"
+    db.add(book)
+    db.flush()
+    for saved in archive.chapters:
+        values = saved.model_dump(exclude={'id', 'versions', 'current_version_id', 'summary_source_version_id'})
+        chapter = Chapter(book_id=book.id, **values)
+        db.add(chapter)
+        db.flush()
+        ids, counts = {}, {}
+        for version in saved.versions:
+            fields = version.model_dump(exclude={'id', 'content'})
+            restored = ChapterVersion(chapter_id=chapter.id, content_path="", content_text=version.content,
+                                      word_count=count_words(version.content), **fields)
+            db.add(restored)
+            db.flush()
+            ids[version.id], counts[version.id] = restored.id, restored.word_count
+        chapter.current_version_id = ids[saved.current_version_id]
+        chapter.word_count = counts[saved.current_version_id]
+        chapter.summary_source_version_id = ids.get(saved.summary_source_version_id)
+        if saved.id == archive.current_chapter_id:
+            book.current_chapter_id = chapter.id
+    for outline in archive.outlines:
+        db.add(OutlineTextVersion(book_id=book.id, **outline.model_dump(exclude={'id'})))
+    db.commit()
+    return serialize_book(book, db)
