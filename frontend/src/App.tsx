@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BookOpenText, ChevronLeft, FilePlus2, LibraryBig, ListTree, PanelLeftClose, PanelLeftOpen, PenLine, Search, Settings } from 'lucide-react'
 import { Routes, Route, Navigate, Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, API_BASE } from './api/client'
@@ -145,15 +145,20 @@ function WorkspaceLayout() {
   const { currentBook, setCurrentBook, setChapters } = useAppStore()
   const { navCollapsed, toggleNav } = useUiPrefs()
   const [error, setError] = useState('')
+  const loadId = useRef(0)
+  const [loadedBook, setLoadedBook] = useState('')
   const loadWorkspace = async () => {
     if (!bookId) return
+    const requestId = ++loadId.current
     setError('')
     try {
-      const [book, chapters] = await Promise.all([api<Book>(`/books/${bookId}`), api<Chapter[]>(`/books/${bookId}/chapters`)])
+      const [book, chapters] = await Promise.all([api<Book>(`/books/${bookId}`), api<Chapter[]>(`/books/${bookId}/chapters?include_content=false`)])
+      if (requestId !== loadId.current) return
       setCurrentBook(book); setChapters(chapters)
+      setLoadedBook(bookId)
     } catch (exc) { setError(String(exc)) }
   }
-  useEffect(() => { void loadWorkspace() }, [bookId])
+  useEffect(() => { void loadWorkspace(); return () => { loadId.current++ } }, [bookId])
   const activeKey = navGroups.flatMap(group => group.items).find(item => location.pathname.endsWith(`/${item.key}`))?.key || 'reader'
   const activeLabel = navGroups.flatMap(group => group.items).find(item => item.key === activeKey)?.label || '正文'
 
@@ -161,7 +166,7 @@ function WorkspaceLayout() {
     <InlineError message={`打开书籍工作区失败：${error}`} onRetry={() => void loadWorkspace()} />
     <Button variant="ghost" onClick={() => navigate('/')}><ChevronLeft size={15} />返回书架</Button>
   </div>
-  if (!currentBook || String(currentBook.id) !== bookId) return <div className="min-h-screen bg-paper"><Loading text="正在打开书籍工作区…" /></div>
+  if (!currentBook || String(currentBook.id) !== bookId || loadedBook !== bookId) return <div className="min-h-screen bg-paper"><Loading text="正在打开书籍工作区…" /></div>
 
   return <div className="flex h-screen overflow-hidden bg-paper">
     <aside className={`flex shrink-0 flex-col border-r border-line bg-paper-raised transition-[width] duration-150 ${navCollapsed ? 'w-14' : 'w-56'}`} aria-label="工作区导航">

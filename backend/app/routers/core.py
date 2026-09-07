@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from ..database import get_db
 from ..llm_errors import llm_http_error
@@ -77,9 +77,9 @@ def delete_book(book_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/books/{book_id}/chapters", response_model=list[ChapterOut])
-def list_chapters(book_id: int, db: Session = Depends(get_db)):
+def list_chapters(book_id: int, include_content: bool = True, db: Session = Depends(get_db)):
     require_book(db, book_id)
-    return [serialize_chapter(chapter, db) for chapter in db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.chapter_number)).all()]
+    return [serialize_chapter(chapter, db, include_content) for chapter in db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.chapter_number)).all()]
 
 
 @router.post("/books/{book_id}/chapters", response_model=ChapterOut)
@@ -181,10 +181,13 @@ def create_version(chapter_id: int, payload: VersionCreate, db: Session = Depend
 
 
 @router.get("/chapters/{chapter_id}/versions", response_model=list[ChapterVersionOut])
-def list_versions(chapter_id: int, db: Session = Depends(get_db)):
+def list_versions(chapter_id: int, include_content: bool = True, db: Session = Depends(get_db)):
     require_chapter(db, chapter_id)
-    versions = db.scalars(select(ChapterVersion).where(ChapterVersion.chapter_id == chapter_id).order_by(ChapterVersion.version_number.desc())).all()
-    return [{**{column.name: getattr(item, column.name) for column in ChapterVersion.__table__.columns}, "content": read_content(item)} for item in versions]
+    query = select(ChapterVersion).where(ChapterVersion.chapter_id == chapter_id).order_by(ChapterVersion.version_number.desc())
+    if not include_content:
+        query = query.options(defer(ChapterVersion.content_text))
+    versions = db.scalars(query).all()
+    return [{**{column.name: getattr(item, column.name) for column in ChapterVersion.__table__.columns if column.name != "content_text"}, "content": read_content(item) if include_content else ""} for item in versions]
 
 
 @router.get("/chapters/{chapter_id}/diff")

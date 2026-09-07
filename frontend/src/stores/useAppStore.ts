@@ -18,5 +18,5 @@ export const useAppStore = create<AppState>((set) => ({
   setCurrentBook: (currentBook) => set(state => state.currentBook?.id === currentBook?.id
     ? { currentBook }
     : { currentBook, currentChapter: null, chapters: [] }),
-  setChapters: (chapters) => set({ chapters }), setCurrentChapter: (currentChapter) => set({ currentChapter }),
+  setChapters: (chapters) => set(state => ({ chapters, currentBook: state.currentBook ? { ...state.currentBook, chapter_count: chapters.length, total_word_count: chapters.reduce((sum, chapter) => sum + chapter.word_count, 0) } : null })), setCurrentChapter: (currentChapter) => set({ currentChapter }),
 }))

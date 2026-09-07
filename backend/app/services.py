@@ -51,7 +51,10 @@ def next_version_number(db: Session, chapter_id: int) -> int:
     return (last or 0) + 1
 
 
-def serialize_chapter(chapter: Chapter, db: Session) -> dict[str, Any]:
+def serialize_chapter(chapter: Chapter, db: Session, include_content: bool = True) -> dict[str, Any]:
+    if not include_content:
+        return {**{column.name: getattr(chapter, column.name) for column in Chapter.__table__.columns},
+                "summary_is_stale": bool(chapter.summary and chapter.summary_source_version_id != chapter.current_version_id)}
     version = db.get(ChapterVersion, chapter.current_version_id) if chapter.current_version_id else None
     content = read_content(version)
     return {**{column.name: getattr(chapter, column.name) for column in Chapter.__table__.columns},

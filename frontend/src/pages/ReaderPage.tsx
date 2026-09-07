@@ -41,6 +41,26 @@ export function ReaderPage() {
   const fileInput = useRef<HTMLInputElement>(null)
   const readScrollRef = useRef<HTMLDivElement>(null)
   const positionTimer = useRef<number | undefined>(undefined)
+  const pendingPosition = useRef<{ id: number; top: number } | null>(null)
+  const flushPosition = () => {
+    window.clearTimeout(positionTimer.current)
+    const pending = pendingPosition.current
+    pendingPosition.current = null
+    if (pending) void api(`/chapters/${pending.id}`, { method: 'PUT', keepalive: true, body: JSON.stringify({ reading_position: pending.top }) }).catch(() => undefined)
+  }
+  const requestId = useRef(0)
+  const initialized = useRef(false)
+  const [loadingChapter, setLoadingChapter] = useState(false)
+  const [draftRestored, setDraftRestored] = useState(false)
+  const baseVersion = useRef<number | null | undefined>(null)
+  const draftKey = (id: number) => `noveltools:draft:${currentBook?.id}:${id}`
+  const clearDraft = (id: number) => { try { localStorage.removeItem(draftKey(id)) } catch { /* Storage may be unavailable. */ } }
+  const rememberDraft = (nextContent: string, nextTitle: string) => {
+    if (!currentChapter) return
+    try { localStorage.setItem(draftKey(currentChapter.id), JSON.stringify({ content: nextContent, title: nextTitle, base: baseVersion.current })) }
+    catch { setError('浏览器草稿空间不足，请及时保存正文。') }
+  }
+  useEffect(() => () => { requestId.current++; initialized.current = false; flushPosition() }, [])
 
   const dirty = !!currentChapter && (content !== currentChapter.current_content || title !== currentChapter.title)
   const editing = prefs.readerMode === 'edit'
@@ -49,18 +69,44 @@ export function ReaderPage() {
   /* ---------- 章节切换（含未保存保护） ---------- */
 
   const applyChapter = async (chapter: Chapter) => {
-    setCurrentChapter(chapter)
-    setContent(chapter.current_content)
-    setTitle(chapter.title)
-    setError(''); setDiffPair({ left: null, right: null }); setShowDiff(false)
-    try { setVersions(await api<Version[]>(`/chapters/${chapter.id}/versions`)) } catch { setVersions([]) }
+    const token = ++requestId.current
+    flushPosition()
+    setLoadingChapter(true); setError(''); setVersions([])
+    try {
+      const fresh = await api<Chapter>(`/chapters/${chapter.id}`)
+      if (token !== requestId.current) return
+      setCurrentChapter(fresh)
+      const state = useAppStore.getState()
+      state.setChapters(state.chapters.map(item => item.id === fresh.id ? fresh : item))
+      setContent(fresh.current_content); setTitle(fresh.title); baseVersion.current = fresh.current_version_id
+      setDraftRestored(false)
+      try {
+        const stored = localStorage.getItem(draftKey(chapter.id))
+        if (stored) {
+          const draft = JSON.parse(stored)
+          if (typeof draft.content === 'string' && typeof draft.title === 'string' &&
+              (draft.content !== fresh.current_content || draft.title !== fresh.title)) {
+            setContent(draft.content); setTitle(draft.title); baseVersion.current = draft.base
+            setDraftRestored(true); prefs.setReaderMode('edit')
+          }
+        }
+      } catch { /* A damaged browser draft cannot replace the saved text. */ }
+      if (state.currentBook) {
+        state.setCurrentBook({ ...state.currentBook, current_chapter_id: fresh.id })
+        void api(`/books/${fresh.book_id}`, { method: 'PUT', body: JSON.stringify({ current_chapter_id: fresh.id }) }).catch(() => setError('阅读章节记录失败，请检查服务连接。'))
+      }
+      setDiffPair({ left: null, right: null }); setShowDiff(false)
+      const history = await api<Version[]>(`/chapters/${chapter.id}/versions?include_content=false`)
+      if (token === requestId.current) setVersions(history)
+    } catch (exc) { if (token === requestId.current) setError(String(exc)) }
+    finally { if (token === requestId.current) setLoadingChapter(false) }
   }
   const requestChapter = (chapter: Chapter) => {
-    if (chapter.id === currentChapter?.id) return
+    if (saving || restoreBusy || chapter.id === currentChapter?.id) return
     if (dirty) setPendingSwitch(chapter)
     else void applyChapter(chapter)
   }
-  useEffect(() => { if (chapters.length) void applyChapter(chapters.find(item => item.id === currentBook?.current_chapter_id) || chapters[0]); else setCurrentChapter(null) }, [currentBook?.id])
+  useEffect(() => { if (!initialized.current && chapters.length) { initialized.current = true; void applyChapter(chapters.find(item => item.id === currentBook?.current_chapter_id) || chapters[0]) } }, [currentBook?.id, chapters.length])
   useUnsavedChanges(dirty)
 
 
@@ -70,22 +116,28 @@ export function ReaderPage() {
   }, [currentChapter?.id, editing])
   const recordPosition = () => {
     if (editing || !currentChapter) return
+    const id = currentChapter.id
+    const top = Math.round(readScrollRef.current?.scrollTop ?? 0)
+    const state = useAppStore.getState()
+    state.setChapters(state.chapters.map(item => item.id === id ? { ...item, reading_position: top } : item))
+    state.setCurrentChapter({ ...currentChapter, reading_position: top })
     window.clearTimeout(positionTimer.current)
-    positionTimer.current = window.setTimeout(() => {
-      const top = readScrollRef.current?.scrollTop ?? 0
-      void api(`/chapters/${currentChapter.id}`, { method: 'PUT', body: JSON.stringify({ reading_position: Math.round(top) }) }).catch(() => undefined)
-    }, 800)
+    pendingPosition.current = { id, top }
+    positionTimer.current = window.setTimeout(flushPosition, 200)
   }
 
   /* ---------- 业务操作（语义与原实现一致） ---------- */
 
   const save = async () => {
-    if (!currentChapter) return false
+    if (!currentChapter || loadingChapter || saving) return false
     setSaving(true); setError('')
     try {
-      const version = await api<Version>(`/chapters/${currentChapter.id}/versions`, { method: 'POST', body: JSON.stringify({ content, title, base_version_id: currentChapter.current_version_id, note: '阅读器手动保存' }) })
+      const version = await api<Version>(`/chapters/${currentChapter.id}/versions`, { method: 'POST', body: JSON.stringify({ content, title, base_version_id: baseVersion.current, note: '阅读器手动保存' }) })
       const updated = { ...currentChapter, title, current_content: content, current_version_id: version.id, word_count: version.word_count, summary_is_stale: !!currentChapter.summary }
-      setCurrentChapter(updated); setChapters(chapters.map(item => item.id === updated.id ? updated : item))
+      if (useAppStore.getState().currentChapter?.id !== updated.id) return true
+      baseVersion.current = version.id
+      clearDraft(updated.id); setDraftRestored(false)
+      setCurrentChapter(updated); setChapters(useAppStore.getState().chapters.map(item => item.id === updated.id ? updated : item))
       setVersions([version, ...versions])
       toast(`已保存为 v${version.version_number}，旧版本可恢复`)
       return true
@@ -123,6 +175,7 @@ export function ReaderPage() {
       const version = await api<Version>(`/chapters/${currentChapter.id}/versions/${restoring.id}/restore?base_version_id=${currentChapter.current_version_id}`, { method: 'POST' })
       const updated = await api<Chapter>(`/chapters/${currentChapter.id}`)
       setCurrentChapter(updated); setChapters(chapters.map(item => item.id === updated.id ? updated : item))
+      baseVersion.current = version.id; clearDraft(updated.id); setDraftRestored(false)
       setContent(version.content); setVersions([version, ...versions]); setRestoring(null)
       toast(`已从 v${restoring.version_number} 恢复，生成新版本 v${version.version_number}`)
     } catch (exc) { setError(String(exc)) } finally { setRestoreBusy(false) }
@@ -166,7 +219,15 @@ export function ReaderPage() {
     } catch (exc) { setError(String(exc)); toast('批量梗概更新失败，已完成的结果已保留', 'danger') }
     finally { setBatchSummarizing(false) }
   }
-  const diffVersions = diffPair.left && diffPair.right ? { left: versions.find(v => v.id === diffPair.left), right: versions.find(v => v.id === diffPair.right) } : null
+  const [diffVersions, setDiffVersions] = useState<{ left: { content: string }; right: { content: string } } | null>(null)
+  useEffect(() => {
+    let active = true
+    setDiffVersions(null)
+    if (showDiff && currentChapter && diffPair.left && diffPair.right)
+      void api<{ left: { content: string }; right: { content: string } }>(`/chapters/${currentChapter.id}/diff?left=${diffPair.left}&right=${diffPair.right}`)
+        .then(result => { if (active) setDiffVersions(result) }).catch(exc => { if (active) setError(String(exc)) })
+    return () => { active = false }
+  }, [showDiff, currentChapter?.id, diffPair.left, diffPair.right])
   const visible = chapters.filter(item => `${item.title}${item.chapter_number}`.includes(search))
   const showChapters = prefs.readerShowChapters && !focusMode
   const showContext = prefs.readerShowContext && !focusMode
@@ -233,18 +294,20 @@ export function ReaderPage() {
         {dirty && <Badge tone="warn">有未保存修改</Badge>}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <Button size="sm" variant="secondary" disabled={!currentChapter || dirty || saving || summarizing || batchSummarizing} title={dirty ? '请先保存正文修改，再生成梗概' : '使用已保存的本章正文生成梗概'} onClick={() => void generateSummary()}>{summarizing ? '梗概生成中…' : '生成本章梗概'}</Button>
-          <Button size="sm" variant="secondary" disabled={saving || !currentChapter} onClick={() => void save()}><Save size={14} />{saving ? '保存中…' : '保存新版本'}</Button>
+          <Button size="sm" variant="secondary" disabled={saving || loadingChapter || !currentChapter} onClick={() => void save()}><Save size={14} />{saving ? '保存中…' : '保存新版本'}</Button>
           <Button size="sm" variant="ghost" title="梗概与历史" aria-label="切换梗概与历史" onClick={() => { if (focusMode) setFocusMode(false); else prefs.toggleReaderContext() }}><PanelRight size={15} /></Button>
         </div>
       </div>
       {error && <div className="shrink-0 px-4 pt-3"><InlineError message={error} /></div>}
 
+      {draftRestored && <div className="px-4 py-2 text-meta text-warn-strong">已恢复浏览器中的未保存草稿；保存时仍会检查版本冲突。</div>}
+      {(dirty || error) && currentChapter && <Button size="sm" variant="ghost" onClick={() => { if (!dirty || window.confirm('放弃当前草稿并重新加载已保存正文？')) { clearDraft(currentChapter.id); void applyChapter(currentChapter) } }}>重新加载已保存正文</Button>}
       {/* 正文区 */}
       {currentChapter ? (
         editing ? <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
           <div className="mx-auto w-full max-w-measure flex-1 px-6 py-6">
-            <Input className="border-transparent bg-transparent px-0 font-serif text-lg font-semibold focus:border-line" value={title} onChange={e => setTitle(e.target.value)} aria-label="章节标题" placeholder="章节标题" />
-            <Textarea className="paper-text mt-3 min-h-[60vh] resize-y border-0 bg-transparent px-0 shadow-none focus:border-transparent" style={{ fontSize: prefs.readerFontSize }} value={content} onChange={e => setContent(e.target.value)} placeholder="从这里开始写正文，或导入已有章节…" aria-label="章节正文" />
+            <Input className="border-transparent bg-transparent px-0 font-serif text-lg font-semibold focus:border-line" disabled={saving || loadingChapter} value={title} onChange={e => { setTitle(e.target.value); rememberDraft(content, e.target.value) }} aria-label="章节标题" placeholder="章节标题" />
+            <Textarea className="paper-text mt-3 min-h-[60vh] resize-y border-0 bg-transparent px-0 shadow-none focus:border-transparent" style={{ fontSize: prefs.readerFontSize }} disabled={saving || loadingChapter} value={content} onChange={e => { setContent(e.target.value); rememberDraft(e.target.value, title) }} placeholder="从这里开始写正文，或导入已有章节…" aria-label="章节正文" />
           </div>
         </div>
         : <div ref={readScrollRef} onScroll={recordPosition} className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
@@ -300,7 +363,7 @@ export function ReaderPage() {
     <Modal open={!!pendingSwitch} onClose={() => setPendingSwitch(null)} title="当前章节有未保存的修改" width="max-w-md"
       footer={<>
         <Button variant="ghost" onClick={() => setPendingSwitch(null)}>取消</Button>
-        <Button variant="danger" onClick={() => { const target = pendingSwitch; setPendingSwitch(null); if (target) void applyChapter(target) }}>放弃修改并切换</Button>
+        <Button variant="danger" onClick={() => { const target = pendingSwitch; if (currentChapter) clearDraft(currentChapter.id); setPendingSwitch(null); if (target) void applyChapter(target) }}>放弃修改并切换</Button>
         <Button variant="primary" disabled={saving} onClick={async () => { if (!await save()) return; const target = pendingSwitch; setPendingSwitch(null); if (target) void applyChapter(target) }}><Save size={14} />保存并切换</Button>
       </>}>
       <p className="text-body leading-7 text-ink-soft">「{currentChapter?.title}」的正文或标题已修改但尚未保存为版本。保存会生成一个新版本；放弃则丢失本次未保存的修改。</p>
