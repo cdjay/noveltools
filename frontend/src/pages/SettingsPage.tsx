@@ -117,7 +117,7 @@ function ModelSettings() {
 
 export function SettingsPage() {
   return <div className="p-6">
-    <PageHeader title="LLM 配置" description="管理模型接口、密钥与连接测试。配置全局共用，正文与大纲保存不会触发模型调用。" />
+    <PageHeader title="LLM 配置" description="配置全局共用，用于手动生成章节梗概与连接测试。正文与大纲保存不会自动调用模型。" />
     <div className="mt-5"><ModelSettings /></div>
   </div>
 }

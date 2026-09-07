@@ -3,11 +3,12 @@
 @tailwind utilities;
 
 :root {
-  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", system-ui, sans-serif;
+  font-family: "Noto Sans SC Variable", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   color: #2b2822;
   background: #faf8f4;
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * { box-sizing: border-box; }
@@ -26,14 +27,16 @@ button:disabled { cursor: not-allowed; }
 
 ::selection { background: #dde8e8; }
 
-/* 正文排版：宋体系、从容的行高与段落间距 */
+/* 与 WN 一致的正文排版；字体由本地依赖提供，无需外网。 */
 .paper-text {
-  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, "SimSun", serif;
+  font-family: "Noto Serif SC Variable", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-size: 18px;
+  font-weight: 400;
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 2.05;
-  letter-spacing: 0.02em;
-  color: #33302a;
+  letter-spacing: 0.03em;
+  color: #292a27;
 }
 .paper-text::placeholder { color: #b5ae9d; }
 
@@ -55,4 +58,3 @@ button:disabled { cursor: not-allowed; }
   .anim-fade, .anim-rise, .anim-slide-right { animation: none; }
   * { transition-duration: 0.01ms !important; }
 }
-

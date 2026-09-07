@@ -89,6 +89,12 @@ class ChapterOut(ORMModel):
     created_at: datetime
     updated_at: datetime
     current_content: str = ""
+    summary: str = ""
+    summary_content_sha256: str = ""
+    summary_source_version_id: int | None = None
+    summary_model: str = ""
+    summary_updated_at: datetime | None = None
+    summary_is_stale: bool = False
 
 
 class LLMProviderCreate(BaseModel):

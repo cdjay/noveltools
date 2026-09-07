@@ -60,7 +60,7 @@ test('正文保存和历史可用，移除分析入口，失败保存不会切�
     await expect(page.getByText('有未保存修改')).toHaveCount(0)
     await expect(page.getByRole('button', { name: '分析本章角色' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: '组合提示词' })).toHaveCount(0)
-    await expect(page.getByText('本章梗概', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('本章梗概', { exact: true })).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('body.png'), fullPage: true })
     await page.getByRole('button', { name: '大纲', exact: true }).click()
     await page.getByRole('button', { name: '正文', exact: true }).click()

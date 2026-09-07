@@ -59,7 +59,7 @@ export function OutlinePage() {
           <MetaText className="ml-auto tabular-nums">{content.replace(/\s/g, '').length.toLocaleString()} 字</MetaText>
         </div>
         <Textarea aria-label="大纲全文" disabled={busy || !loaded} value={content} onChange={e => setContent(e.target.value)} placeholder="在这里自由编写故事大纲，无需划分大纲块…"
-          className="paper-text min-h-[65vh] w-full resize-y rounded-none border-0 bg-transparent px-5 py-5 text-[16px] shadow-none focus:border-transparent sm:px-7" />
+          className="paper-text min-h-[65vh] w-full resize-y rounded-none border-0 bg-transparent px-5 py-5 shadow-none focus:border-transparent sm:px-7" />
       </section>
       <aside aria-label="大纲历史" className="self-start rounded-lg border border-line bg-paper-raised">
         <div className="flex items-center gap-2 border-b border-line-soft px-4 py-3 text-body font-medium"><History size={15} />历史版本 <MetaText>· {versions.length}</MetaText></div>

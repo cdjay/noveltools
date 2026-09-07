@@ -1,5 +1,7 @@
 export type Book = { id: number; title: string; author: string; description: string; genre: string; status: string; current_chapter_id?: number | null; chapter_count: number; total_word_count: number; created_at: string; updated_at: string }
-export type Chapter = { id: number; book_id: number; chapter_number: number; title: string; status: string; current_version_id?: number | null; word_count: number; reading_position: number; current_content: string; updated_at: string }
+export type Chapter = { id: number; book_id: number; chapter_number: number; title: string; status: string; current_version_id?: number | null; word_count: number; reading_position: number; current_content: string; updated_at: string; summary: string; summary_content_sha256: string; summary_source_version_id: number | null; summary_model: string; summary_updated_at: string | null; summary_is_stale: boolean }
+export type SummaryResult = { chapter_id: number; status: 'completed' | 'skipped' | 'failed'; updated: boolean; skipped: boolean; message: string; chapter: Chapter | null }
+export type SummaryBatchResult = { book_id: number; total: number; updated: number; skipped: number; failed: number; results: SummaryResult[] }
 export type Version = { id: number; chapter_id: number; version_number: number; content: string; word_count: number; source: string; note: string; created_at: string }
 export type Provider = { id: number; provider_name: string; provider_type: 'openai_compatible'; base_url: string; model: string; temperature: number; max_tokens: number; timeout: number; enabled: boolean; has_api_key: boolean }
 export type OutlineVersion = { id: number; book_id: number; version_number: number; content: string; source: string; note: string; created_at: string }

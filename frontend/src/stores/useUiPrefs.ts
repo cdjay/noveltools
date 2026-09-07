@@ -18,7 +18,7 @@ type UiPrefs = {
 export const useUiPrefs = create<UiPrefs>()(persist((set) => ({
   navCollapsed: false,
   readerMode: 'read',
-  readerFontSize: 17,
+  readerFontSize: 18,
   readerShowChapters: true,
   readerShowContext: true,
   toggleNav: () => set(state => ({ navCollapsed: !state.navCollapsed })),
@@ -26,4 +26,11 @@ export const useUiPrefs = create<UiPrefs>()(persist((set) => ({
   setReaderFontSize: (readerFontSize) => set({ readerFontSize: Math.max(14, Math.min(22, readerFontSize)) }),
   toggleReaderChapters: () => set(state => ({ readerShowChapters: !state.readerShowChapters })),
   toggleReaderContext: () => set(state => ({ readerShowContext: !state.readerShowContext })),
-}), { name: 'noveltools-ui-prefs' }))
+}), {
+  name: 'noveltools-ui-prefs',
+  version: 1,
+  migrate: (persisted) => {
+    const saved = persisted as Partial<UiPrefs>
+    return { ...saved, readerFontSize: saved.readerFontSize === 17 ? 18 : saved.readerFontSize ?? 18 }
+  },
+}))

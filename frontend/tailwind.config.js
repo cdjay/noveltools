@@ -53,8 +53,8 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', '"Source Han Sans SC"', 'system-ui', 'sans-serif'],
-        serif: ['"Noto Serif SC"', '"Source Han Serif SC"', '"Songti SC"', 'STSong', '"SimSun"', 'serif'],
+        sans: ['"Noto Sans SC Variable"', '"Noto Sans SC"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+        serif: ['"Noto Serif SC Variable"', '"Noto Serif SC"', '"Source Han Serif SC"', '"Songti SC"', 'serif'],
         mono: ['"SFMono-Regular"', 'Consolas', '"Liberation Mono"', 'Menlo', 'monospace'],
       },
       fontSize: {

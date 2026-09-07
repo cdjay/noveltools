@@ -97,5 +97,5 @@ def test_startup_and_body_writes_never_call_models_or_create_analysis(monkeypatc
 
 def test_retired_features_are_removed_from_api():
     paths = client.get("/openapi.json").json()["paths"]
-    for fragment in ("graphify", "characters", "knowledge", "events", "threads", "analysis", "summary", "summaries", "prompt", "blocks", "outlines", "change-logs"):
+    for fragment in ("graphify", "characters", "knowledge", "events", "threads", "analysis", "prompt", "blocks", "outlines", "change-logs"):
         assert not any(fragment in path for path in paths), fragment

@@ -4,7 +4,7 @@ import { diff_match_patch } from 'diff-match-patch'
 import { api, upload } from '../api/client'
 import { useAppStore } from '../stores/useAppStore'
 import { useUiPrefs } from '../stores/useUiPrefs'
-import type { Chapter, Version } from '../types'
+import type { Chapter, Version, SummaryResult, SummaryBatchResult } from '../types'
 import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, MetaText, Modal, Panel, SectionTitle, Select, StatusBadge, Textarea, toast } from '../lib/ui'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
 
@@ -26,6 +26,8 @@ export function ReaderPage() {
   const [title, setTitle] = useState('')
   const [versions, setVersions] = useState<Version[]>([])
   const [saving, setSaving] = useState(false)
+  const [summarizing, setSummarizing] = useState(false)
+  const [batchSummarizing, setBatchSummarizing] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [focusMode, setFocusMode] = useState(false)
@@ -82,8 +84,7 @@ export function ReaderPage() {
     setSaving(true); setError('')
     try {
       const version = await api<Version>(`/chapters/${currentChapter.id}/versions`, { method: 'POST', body: JSON.stringify({ content, note: '阅读器手动保存' }) })
-      await api(`/chapters/${currentChapter.id}`, { method: 'PUT', body: JSON.stringify({ title }) })
-      const updated = { ...currentChapter, title, current_content: content, word_count: version.word_count, current_version_id: version.id }
+      const updated = await api<Chapter>(`/chapters/${currentChapter.id}`, { method: 'PUT', body: JSON.stringify({ title }) })
       setCurrentChapter(updated); setChapters(chapters.map(item => item.id === updated.id ? updated : item))
       setVersions([version, ...versions])
       toast(`已保存为 v${version.version_number}，旧版本可恢复`)
@@ -120,11 +121,50 @@ export function ReaderPage() {
     setRestoreBusy(true)
     try {
       const version = await api<Version>(`/chapters/${currentChapter.id}/versions/${restoring.id}/restore`, { method: 'POST' })
-      const updated = { ...currentChapter, current_content: version.content, word_count: version.word_count, current_version_id: version.id }
+      const updated = await api<Chapter>(`/chapters/${currentChapter.id}`)
       setCurrentChapter(updated); setChapters(chapters.map(item => item.id === updated.id ? updated : item))
       setContent(version.content); setVersions([version, ...versions]); setRestoring(null)
       toast(`已从 v${restoring.version_number} 恢复，生成新版本 v${version.version_number}`)
     } catch (exc) { setError(String(exc)) } finally { setRestoreBusy(false) }
+  }
+  const mergeSummaries = (results: SummaryResult[]) => {
+    const state = useAppStore.getState()
+    if (state.currentBook?.id !== currentBook?.id) return
+    const merge = (chapter: Chapter) => {
+      const fresh = results.find(item => item.chapter_id === chapter.id)?.chapter
+      if (!fresh) return chapter
+      return { ...chapter, summary: fresh.summary, summary_content_sha256: fresh.summary_content_sha256,
+        summary_source_version_id: fresh.summary_source_version_id, summary_model: fresh.summary_model,
+        summary_updated_at: fresh.summary_updated_at,
+        summary_is_stale: fresh.summary_is_stale || fresh.current_version_id !== chapter.current_version_id }
+    }
+    state.setChapters(state.chapters.map(merge))
+    if (state.currentChapter) state.setCurrentChapter(merge(state.currentChapter))
+  }
+  const generateSummary = async () => {
+    if (!currentChapter || dirty || saving || summarizing || batchSummarizing) return
+    setSummarizing(true); setError('')
+    if (!prefs.readerShowContext) prefs.toggleReaderContext()
+    setFocusMode(false)
+    try {
+      const result = await api<SummaryResult>(`/chapters/${currentChapter.id}/summary`, { method: 'POST' })
+      mergeSummaries([result])
+      if (result.status === 'failed') setError(result.message)
+      toast(result.message, result.status === 'failed' ? 'danger' : 'ok')
+    } catch (exc) { setError(String(exc)); toast('梗概生成失败，已有内容保留', 'danger') }
+    finally { setSummarizing(false) }
+  }
+  const generateBookSummaries = async () => {
+    if (!currentBook || dirty || saving || summarizing || batchSummarizing) return
+    setBatchSummarizing(true); setError('')
+    try {
+      const result = await api<SummaryBatchResult>(`/books/${currentBook.id}/chapter-summaries`, { method: 'POST' })
+      mergeSummaries(result.results)
+      const report = `梗概更新：成功 ${result.updated} 章，跳过 ${result.skipped} 章，失败 ${result.failed} 章`
+      toast(report, result.failed ? 'danger' : 'ok')
+      if (result.failed) setError(`${report}。${result.results.filter(item => item.status === 'failed').map(item => `${item.chapter?.title || '章节'}：${item.message}`).join('；')}`)
+    } catch (exc) { setError(String(exc)); toast('批量梗概更新失败，已完成的结果已保留', 'danger') }
+    finally { setBatchSummarizing(false) }
   }
   const diffVersions = diffPair.left && diffPair.right ? { left: versions.find(v => v.id === diffPair.left), right: versions.find(v => v.id === diffPair.right) } : null
   const visible = chapters.filter(item => `${item.title}${item.chapter_number}`.includes(search))
@@ -170,6 +210,7 @@ export function ReaderPage() {
         })}
       </div>
       <div className="border-t border-line-soft p-2.5">
+        <Button variant="ghost" size="sm" className="w-full" disabled={dirty || saving || summarizing || batchSummarizing} title="按已保存正文生成梗概，已有梗概且正文未变化的章节会跳过" onClick={() => void generateBookSummaries()}>{batchSummarizing ? '批量生成中…' : '批量更新章节梗概'}</Button>
         <Button variant="ghost" size="sm" className="mt-1 w-full" onClick={() => fileInput.current?.click()}><Upload size={13} />导入 TXT / Markdown</Button>
       </div>
     </aside>}
@@ -191,8 +232,9 @@ export function ReaderPage() {
         <div className="mx-1 h-5 w-px bg-line" />
         {dirty && <Badge tone="warn">有未保存修改</Badge>}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          <Button size="sm" variant="secondary" disabled={!currentChapter || dirty || saving || summarizing || batchSummarizing} title={dirty ? '请先保存正文修改，再生成梗概' : '使用已保存的本章正文生成梗概'} onClick={() => void generateSummary()}>{summarizing ? '梗概生成中…' : '生成本章梗概'}</Button>
           <Button size="sm" variant="secondary" disabled={saving || !currentChapter} onClick={() => void save()}><Save size={14} />{saving ? '保存中…' : '保存新版本'}</Button>
-          <Button size="sm" variant="ghost" title="版本历史" aria-label="切换版本历史" onClick={() => { if (focusMode) setFocusMode(false); else prefs.toggleReaderContext() }}><PanelRight size={15} /></Button>
+          <Button size="sm" variant="ghost" title="梗概与历史" aria-label="切换梗概与历史" onClick={() => { if (focusMode) setFocusMode(false); else prefs.toggleReaderContext() }}><PanelRight size={15} /></Button>
         </div>
       </div>
       {error && <div className="shrink-0 px-4 pt-3"><InlineError message={error} /></div>}
@@ -221,9 +263,15 @@ export function ReaderPage() {
       </div>}
     </div>
 
-    {/* 右栏：上下文（窄屏自动收纳，可通过右上角按钮在宽屏重新展开） */}
+    {/* 右栏：本章梗概与版本历史 */}
     {showContext && currentChapter && <aside className="absolute inset-y-0 right-0 z-20 flex w-72 max-w-full shrink-0 flex-col overflow-y-auto border-l border-line bg-paper-raised shadow-pop scrollbar-thin xl:static xl:shadow-none" aria-label="章节历史与管理">
-      <div className="space-y-4 p-3.5"><Button size="sm" variant="ghost" onClick={prefs.toggleReaderContext}>关闭历史面板</Button>
+      <div className="space-y-4 p-3.5"><Button size="sm" variant="ghost" onClick={prefs.toggleReaderContext}>关闭侧栏</Button>
+        <Panel title="本章梗概">
+          {currentChapter.summary_is_stale && <Badge tone="warn">正文已变化，建议重新生成</Badge>}
+          <p className="mt-2 whitespace-pre-wrap break-words text-body leading-7 text-ink-soft" aria-label="本章梗概内容">{currentChapter.summary || '尚未生成梗概。点击上方“生成本章梗概”，使用 LLM 整理本章内容。'}</p>
+          {currentChapter.summary_updated_at && <MetaText className="mt-2">{currentChapter.summary_model} · {new Date(currentChapter.summary_updated_at).toLocaleString()}</MetaText>}
+          <MetaText className="mt-2">{dirty ? '正文有未保存修改，请先保存再生成。' : '按已保存正文生成；批量更新跳过正文未变化的章节。'}</MetaText>
+        </Panel>
         <Panel title={<span className="inline-flex items-center gap-1.5"><History size={14} />版本历史</span>} action={<Button size="sm" variant="ghost" onClick={() => setShowDiff(true)} disabled={versions.length < 2}><FileDiff size={13} />对比</Button>}>
           <div className="space-y-1.5">
             {versions.map(version => {

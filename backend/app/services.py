@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from typing import Any
 from sqlalchemy import select
@@ -46,7 +47,14 @@ def next_version_number(db: Session, chapter_id: int) -> int:
 
 def serialize_chapter(chapter: Chapter, db: Session) -> dict[str, Any]:
     version = db.get(ChapterVersion, chapter.current_version_id) if chapter.current_version_id else None
-    return {**{column.name: getattr(chapter, column.name) for column in Chapter.__table__.columns}, "current_content": read_content(version)}
+    content = read_content(version)
+    return {**{column.name: getattr(chapter, column.name) for column in Chapter.__table__.columns},
+            "current_content": content,
+            "summary_is_stale": bool(chapter.summary and chapter.summary_content_sha256 != content_sha256(content))}
+
+
+def content_sha256(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def serialize_book(book: Book, db: Session) -> dict[str, Any]:
