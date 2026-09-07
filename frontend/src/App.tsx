@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BookOpenText, ChevronLeft, ClipboardList, FilePlus2, LibraryBig, ListTree, Milestone, Network, PanelLeftClose, PanelLeftOpen, PenLine, ScrollText, Search, Settings, Users } from 'lucide-react'
+import { BookOpenText, ChevronLeft, FilePlus2, LibraryBig, ListTree, PanelLeftClose, PanelLeftOpen, PenLine, Search, Settings } from 'lucide-react'
 import { Routes, Route, Navigate, Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, API_BASE } from './api/client'
 import { useAppStore } from './stores/useAppStore'
@@ -7,13 +7,8 @@ import { useUiPrefs } from './stores/useUiPrefs'
 import type { Book, Chapter } from './types'
 import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, Loading, Modal, PageHeader, Select, Textarea, toast, ToastHost } from './lib/ui'
 import { ReaderPage } from './pages/ReaderPage'
-import { CharactersPage } from './pages/CharactersPage'
-import { KnowledgePage } from './pages/KnowledgePage'
 import { OutlinePage } from './pages/OutlinePage'
-import { TimelinePage } from './pages/TimelinePage'
-import { AnalysisPage } from './pages/AnalysisPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { GraphifyPage } from './pages/GraphifyPage'
 
 const bookStatusLabel: Record<string, string> = { draft: '草稿', ongoing: '连载', completed: '已完成' }
 const bookStatusTone = (status: string) => status === 'completed' ? 'ok' as const : status === 'ongoing' ? 'accent' as const : 'neutral' as const
@@ -87,15 +82,15 @@ function LibraryPage() {
         <div className="flex items-center gap-3">
           <span className="flex h-9 w-9 items-center justify-center rounded-md bg-accent-700 text-white"><LibraryBig size={19} /></span>
           <div>
-            <div className="text-[17px] font-bold tracking-tight text-ink">小说状态工作台</div>
-            <div className="text-meta text-ink-faint">把正文变成可验证、可继承的小说状态 · 全部数据只保存在本机</div>
+            <div className="text-[17px] font-bold tracking-tight text-ink">小说写作工作台</div>
+            <div className="text-meta text-ink-faint">专注正文与大纲 · 内容保存在本机</div>
           </div>
         </div>
         <Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true) }}><FilePlus2 size={15} />新建书籍</Button>
       </div>
     </header>
     <main className="mx-auto max-w-6xl px-6 py-8 lg:px-10">
-      <PageHeader title="我的书架" description="每本书的正文、角色、设定与分析记录严格隔离。" actions={
+      <PageHeader title="我的书架" description="每本书的正文、大纲与历史版本独立保存。" actions={
         books.length > 0 ? <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" />
           <Input className="w-64 pl-8" placeholder="搜索书名、作者或类型" value={query} onChange={e => setQuery(e.target.value)} aria-label="搜索书籍" />
@@ -105,7 +100,7 @@ function LibraryPage() {
         {error && <InlineError message={error} onRetry={() => void load()} />}
         {loading ? <Loading text="正在打开书架…" /> : filtered.length === 0 ? (
           query ? <Empty icon={<Search size={22} />} title={`没有找到与“${query}”相关的书`} text="换个关键词试试。" action={<Button variant="ghost" onClick={() => setQuery('')}>清空搜索</Button>} />
-            : <Empty icon={<BookOpenText size={22} />} title="书架上还没有书" text="新建一本书，从第一章开始积累角色、设定和版本。" action={<Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true) }}><FilePlus2 size={15} />新建第一本书</Button>} />
+            : <Empty icon={<BookOpenText size={22} />} title="书架上还没有书" text="新建一本书，从第一章开始写作。" action={<Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true) }}><FilePlus2 size={15} />新建第一本书</Button>} />
         ) : <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map(book => <article key={book.id} className="group flex flex-col rounded-lg border border-line bg-paper-raised p-5 shadow-card transition-shadow duration-fast hover:shadow-pop">
             <div className="flex items-start justify-between gap-3">
@@ -131,7 +126,7 @@ function LibraryPage() {
     <BookFormModal open={formOpen} onClose={() => setFormOpen(false)} book={editing} onSaved={saved => setBooks(editing ? books.map(item => item.id === saved.id ? { ...item, ...saved } : item) : [saved, ...books])} />
     <ConfirmModal open={!!removing} onClose={() => setRemoving(null)} onConfirm={() => void remove()} danger busy={removeBusy}
       title={`删除《${removing?.title}》？`} confirmText="永久删除"
-      description={<>将删除这本书的全部章节、版本、角色、设定与分析记录，<strong className="text-danger-strong">此操作不可撤销</strong>。建议先在书籍设置中导出 JSON 备份。</>} />
+      description={<>将删除这本书的全部内容及历史版本，<strong className="text-danger-strong">此操作不可撤销</strong>。删除前请确认已备份本机数据。</>} />
   </div>
 }
 
@@ -139,10 +134,8 @@ function LibraryPage() {
 
 type NavItem = { key: string; label: string; icon: typeof PenLine }
 const navGroups: { title: string; items: NavItem[] }[] = [
-  { title: '写作', items: [{ key: 'reader', label: '阅读器', icon: PenLine }, { key: 'outline', label: '大纲', icon: ListTree }] },
-  { title: '资料', items: [{ key: 'characters', label: '角色卡', icon: Users }, { key: 'knowledge', label: '世界观与知识', icon: ScrollText }, { key: 'timeline', label: '事件轴', icon: Milestone }] },
-  { title: '分析', items: [{ key: 'graphify', label: '故事图谱', icon: Network }, { key: 'analysis', label: '分析记录', icon: ClipboardList }] },
-  { title: '管理', items: [{ key: 'settings', label: '设置', icon: Settings }] },
+  { title: '写作', items: [{ key: 'reader', label: '正文', icon: PenLine }, { key: 'outline', label: '大纲', icon: ListTree }] },
+  { title: '管理', items: [{ key: 'settings', label: 'LLM 配置', icon: Settings }] },
 ]
 
 function WorkspaceLayout() {
@@ -162,7 +155,7 @@ function WorkspaceLayout() {
   }
   useEffect(() => { void loadWorkspace() }, [bookId])
   const activeKey = navGroups.flatMap(group => group.items).find(item => location.pathname.endsWith(`/${item.key}`))?.key || 'reader'
-  const activeLabel = navGroups.flatMap(group => group.items).find(item => item.key === activeKey)?.label || '阅读器'
+  const activeLabel = navGroups.flatMap(group => group.items).find(item => item.key === activeKey)?.label || '正文'
 
   if (error) return <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-paper px-6">
     <InlineError message={`打开书籍工作区失败：${error}`} onRetry={() => void loadWorkspace()} />
@@ -215,15 +208,10 @@ function WorkspaceLayout() {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
         <Routes>
-          <Route path="reader" element={<ReaderPage />} />
-          <Route path="characters" element={<CharactersPage />} />
-          <Route path="knowledge" element={<KnowledgePage />} />
-          <Route path="outline" element={<OutlinePage />} />
-          <Route path="timeline" element={<TimelinePage />} />
-          <Route path="graphify" element={<GraphifyPage />} />
-          <Route path="analysis" element={<AnalysisPage />} />
+          <Route path="reader" element={<ReaderPage key={bookId} />} />
+          <Route path="outline" element={<OutlinePage key={bookId} />} />
           <Route path="settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="reader" replace />} />
+          <Route path="*" element={<Navigate to={`/books/${bookId}/reader`} replace />} />
         </Routes>
       </div>
     </main>

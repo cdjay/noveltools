@@ -122,6 +122,20 @@ class CharacterVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class OutlineTextVersion(Base):
+    """Immutable whole-outline snapshots; legacy tables remain intact."""
+    __tablename__ = "outline_text_versions"
+    __table_args__ = (UniqueConstraint("book_id", "version_number", name="uq_book_outline_version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+# Historical models are retained for existing database compatibility.
 class Outline(Base):
     __tablename__ = "outlines"
     id: Mapped[int] = mapped_column(primary_key=True)

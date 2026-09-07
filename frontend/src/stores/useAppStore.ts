@@ -14,7 +14,9 @@ type AppState = {
 
 export const useAppStore = create<AppState>((set) => ({
   books: [], currentBook: null, chapters: [], currentChapter: null,
-  setBooks: (books) => set({ books }), setCurrentBook: (currentBook) => set({ currentBook }),
+  setBooks: (books) => set({ books }),
+  setCurrentBook: (currentBook) => set(state => state.currentBook?.id === currentBook?.id
+    ? { currentBook }
+    : { currentBook, currentChapter: null, chapters: [] }),
   setChapters: (chapters) => set({ chapters }), setCurrentChapter: (currentChapter) => set({ currentChapter }),
 }))
-

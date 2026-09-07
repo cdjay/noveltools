@@ -1,128 +1,85 @@
 import { useEffect, useState } from 'react'
-import { ListTree, Plus } from 'lucide-react'
+import { History, RotateCcw, Save } from 'lucide-react'
 import { api } from '../api/client'
 import { useAppStore } from '../stores/useAppStore'
-import type { Outline, OutlineBlock } from '../types'
-import { Badge, Button, Empty, Field, InlineError, Input, Loading, MetaText, PageHeader, Panel, SectionTitle, Textarea, toast } from '../lib/ui'
-
-const blockTypeLabel: Record<string, string> = { volume: '卷', arc: '篇', stage: '阶段', scene: '场景', chapter_plan: '章节计划' }
+import { useUnsavedChanges } from '../lib/useUnsavedChanges'
+import type { OutlineVersion } from '../types'
+import { Badge, Button, ConfirmModal, Empty, InlineError, Loading, MetaText, Modal, PageHeader, Textarea, toast } from '../lib/ui'
 
 export function OutlinePage() {
   const { currentBook } = useAppStore()
-  const [outlines, setOutlines] = useState<Outline[]>([])
-  const [blocks, setBlocks] = useState<OutlineBlock[]>([])
-  const [selected, setSelected] = useState<Outline | null>(null)
+  const [versions, setVersions] = useState<OutlineVersion[]>([])
+  const [content, setContent] = useState('')
   const [loading, setLoading] = useState(true)
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
-  const [outlineForm, setOutlineForm] = useState({ title: '', description: '' })
-  const [blockForm, setBlockForm] = useState({ title: '', summary: '', objective: '', conflict: '', ending: '', start_chapter: '', end_chapter: '' })
   const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<OutlineVersion | null>(null)
+  const [restoring, setRestoring] = useState<OutlineVersion | null>(null)
+  const latest = versions[0]
+  const dirty = content !== (latest?.content || '')
+  useUnsavedChanges(dirty)
 
-  const loadBlocks = async (outline: Outline) => {
-    setSelected(outline)
-    try { setBlocks(await api<OutlineBlock[]>(`/outlines/${outline.id}/blocks`)) } catch (exc) { setError(String(exc)) }
-  }
   const load = async () => {
     if (!currentBook) return
     setLoading(true); setError('')
     try {
-      const data = await api<Outline[]>(`/books/${currentBook.id}/outlines`)
-      setOutlines(data)
-      if (data[0]) await loadBlocks(data[0])
-      else { setSelected(null); setBlocks([]) }
+      const data = await api<OutlineVersion[]>(`/books/${currentBook.id}/outline/versions`)
+      setVersions(data); setContent(data[0]?.content || ''); setLoaded(true)
     } catch (exc) { setError(String(exc)) } finally { setLoading(false) }
   }
   useEffect(() => { void load() }, [currentBook?.id])
 
-  const createOutline = async () => {
-    if (!currentBook || !outlineForm.title.trim()) { setError('请填写大纲名称'); return }
+  const save = async (restore?: OutlineVersion) => {
+    if (!currentBook || busy) return
     setBusy(true); setError('')
     try {
-      const item = await api<Outline>(`/books/${currentBook.id}/outlines`, { method: 'POST', body: JSON.stringify(outlineForm) })
-      setOutlines([...outlines, item]); setOutlineForm({ title: '', description: '' })
-      setBlocks([]); setSelected(item); toast(`大纲「${item.title}」已创建`)
-    } catch (exc) { setError(String(exc)) } finally { setBusy(false) }
-  }
-  const createBlock = async () => {
-    if (!selected || !blockForm.title.trim()) { setError('请填写大纲块标题'); return }
-    setBusy(true); setError('')
-    try {
-      const item = await api<OutlineBlock>(`/outlines/${selected.id}/blocks`, {
-        method: 'POST',
-        body: JSON.stringify({ title: blockForm.title, summary: blockForm.summary, objective: blockForm.objective, conflict: blockForm.conflict, ending: blockForm.ending, start_chapter: blockForm.start_chapter ? Number(blockForm.start_chapter) : null, end_chapter: blockForm.end_chapter ? Number(blockForm.end_chapter) : null, order_index: blocks.length }),
+      const base = `/books/${currentBook.id}/outline/versions`
+      const saved = await api<OutlineVersion>(restore ? `${base}/${restore.id}/restore` : base, {
+        method: 'POST', body: JSON.stringify({ content, base_version_id: latest?.id ?? null }),
       })
-      setBlocks([...blocks, item]); setBlockForm({ title: '', summary: '', objective: '', conflict: '', ending: '', start_chapter: '', end_chapter: '' })
-      toast(`大纲块「${item.title}」已加入`)
-    } catch (exc) { setError(String(exc)) } finally { setBusy(false) }
+      setVersions(previous => [saved, ...previous]); setContent(saved.content)
+      setPreview(null); setRestoring(null)
+      toast(`大纲已保存为 v${saved.version_number}`)
+    } catch (exc) { setError(String(exc)); setRestoring(null) } finally { setBusy(false) }
   }
 
-  return <div className="p-6">
-    <PageHeader title="大纲" description="用轻量分块记录卷、篇、阶段和章节计划；提示词组合会引用大纲位置。" />
-    <div className="mt-5 space-y-4">
-      {error && <InlineError message={error} />}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="space-y-4 self-start">
-          <Panel title={`大纲版本 · ${outlines.length}`} bodyClassName="max-h-72 overflow-y-auto scrollbar-thin">
-            {loading ? <Loading /> : outlines.length === 0 ? <Empty compact icon={<ListTree size={18} />} title="还没有大纲" text="先在下方新建一个大纲版本。" /> : <div className="space-y-1">
-              {outlines.map(item => <button key={item.id} onClick={() => void loadBlocks(item)} className={`w-full rounded-md border-l-2 px-3 py-2.5 text-left transition-colors duration-fast ${selected?.id === item.id ? 'border-accent-600 bg-accent-50' : 'border-transparent hover:bg-paper-sunken'}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-medium text-ink">{item.title}</span>
-                  <Badge tone="accent">v{item.version}</Badge>
-                </div>
-                {item.description && <MetaText className="mt-0.5 line-clamp-1">{item.description}</MetaText>}
-              </button>)}
-            </div>}
-          </Panel>
-          <Panel title="新建大纲版本">
-            <div className="space-y-3">
-              <Field label="名称"><Input value={outlineForm.title} onChange={e => setOutlineForm({ ...outlineForm, title: e.target.value })} placeholder="例如：第一卷大纲" /></Field>
-              <Field label="说明"><Textarea rows={2} value={outlineForm.description} onChange={e => setOutlineForm({ ...outlineForm, description: e.target.value })} /></Field>
-              <Button variant="primary" className="w-full" disabled={busy} onClick={() => void createOutline()}><Plus size={15} />创建大纲</Button>
-            </div>
-          </Panel>
+  if (loading) return <Loading text="正在读取大纲…" />
+  return <div className="mx-auto max-w-7xl p-5 lg:p-7">
+    <PageHeader title="大纲" description="自由编写整篇大纲。每次保存保留一份完整历史，恢复旧稿也会生成新版本。" actions={
+      <Button variant="primary" disabled={busy || !loaded || (!dirty && !!latest)} onClick={() => void save()}><Save size={14} />{busy ? '保存中…' : '保存大纲'}</Button>
+    } />
+    {error && <div className="mt-4"><InlineError message={error} onRetry={!dirty ? () => void load() : undefined} /></div>}
+    <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_260px]">
+      <section className="min-w-0 rounded-lg border border-line bg-paper-raised">
+        <div className="flex flex-wrap items-center gap-3 border-b border-line-soft px-5 py-3">
+          <span className="text-body font-medium">大纲全文</span>
+          <MetaText>{latest ? `当前 v${latest.version_number}` : '尚未保存'}</MetaText>
+          {dirty && <Badge tone="warn">有未保存修改</Badge>}
+          <MetaText className="ml-auto tabular-nums">{content.replace(/\s/g, '').length.toLocaleString()} 字</MetaText>
         </div>
-
-        <div className="space-y-4">
-          <Panel title={selected ? `「${selected.title}」的大纲块` : '大纲块'} description={selected ? `${blocks.length} 个块，按添加顺序排列` : '先选择或新建一个大纲版本'}>
-            {!selected ? <Empty compact title="未选择大纲" /> : blocks.length === 0 ? <Empty compact title="还没有大纲块" text="在下方添加第一个块：一个卷、一个阶段，或一段时间的章节计划。" /> : <ol className="relative space-y-3 border-l-2 border-line pl-5">
-              {blocks.map((block, index) => <li key={block.id} className="relative">
-                <span className="absolute -left-[27px] top-4 h-3 w-3 rounded-full border-2 border-paper-raised bg-accent-400" />
-                <div className="rounded-md border border-line-soft bg-paper px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-ink">{index + 1}. {block.title}</span>
-                    {block.block_type && blockTypeLabel[block.block_type] && <Badge>{blockTypeLabel[block.block_type]}</Badge>}
-                    {(block.start_chapter || block.end_chapter) && <Badge tone="accent">第 {block.start_chapter || '?'} – {block.end_chapter || '?'} 章</Badge>}
-                  </div>
-                  {block.summary && <p className="mt-1.5 text-body leading-6 text-ink-soft">{block.summary}</p>}
-                  <div className="mt-2 grid grid-cols-1 gap-2 text-meta text-ink-faint md:grid-cols-3">
-                    {block.objective && <span><span className="text-ink-soft">目标：</span>{block.objective}</span>}
-                    {block.conflict && <span><span className="text-ink-soft">冲突：</span>{block.conflict}</span>}
-                    {block.ending && <span><span className="text-ink-soft">转折 / 结尾：</span>{block.ending}</span>}
-                  </div>
-                </div>
-              </li>)}
-            </ol>}
-          </Panel>
-          {selected && <Panel title={`向「${selected.title}」添加大纲块`}>
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <Field label="标题"><Input value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} placeholder="例如：初入京城" /></Field>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="起始章"><Input type="number" min={1} value={blockForm.start_chapter} onChange={e => setBlockForm({ ...blockForm, start_chapter: e.target.value })} /></Field>
-                  <Field label="结束章"><Input type="number" min={1} value={blockForm.end_chapter} onChange={e => setBlockForm({ ...blockForm, end_chapter: e.target.value })} /></Field>
-                </div>
-              </div>
-              <Field label="概要"><Textarea rows={2} value={blockForm.summary} onChange={e => setBlockForm({ ...blockForm, summary: e.target.value })} /></Field>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <Field label="目标"><Textarea rows={2} value={blockForm.objective} onChange={e => setBlockForm({ ...blockForm, objective: e.target.value })} /></Field>
-                <Field label="冲突"><Textarea rows={2} value={blockForm.conflict} onChange={e => setBlockForm({ ...blockForm, conflict: e.target.value })} /></Field>
-                <Field label="转折 / 结尾"><Textarea rows={2} value={blockForm.ending} onChange={e => setBlockForm({ ...blockForm, ending: e.target.value })} /></Field>
-              </div>
-              <Button variant="primary" disabled={busy} onClick={() => void createBlock()}><Plus size={15} />添加大纲块</Button>
+        <Textarea aria-label="大纲全文" disabled={busy || !loaded} value={content} onChange={e => setContent(e.target.value)} placeholder="在这里自由编写故事大纲，无需划分大纲块…"
+          className="paper-text min-h-[65vh] w-full resize-y rounded-none border-0 bg-transparent px-5 py-5 text-[16px] shadow-none focus:border-transparent sm:px-7" />
+      </section>
+      <aside aria-label="大纲历史" className="self-start rounded-lg border border-line bg-paper-raised">
+        <div className="flex items-center gap-2 border-b border-line-soft px-4 py-3 text-body font-medium"><History size={15} />历史版本 <MetaText>· {versions.length}</MetaText></div>
+        <div className="max-h-[65vh] space-y-2 overflow-y-auto p-3 scrollbar-thin">
+          {!versions.length ? <Empty compact title="暂无历史版本" text="第一次保存后，完整大纲会保留在这里。" /> : versions.map(version => <div key={version.id} className="rounded-md border border-line-soft p-3">
+            <div className="flex items-center justify-between text-body"><strong>v{version.version_number}</strong>{version.id === latest?.id && <Badge tone="accent">当前</Badge>}</div>
+            <MetaText className="mt-1">{new Date(version.created_at).toLocaleString()}</MetaText>
+            {version.note && <MetaText className="mt-1 break-words">{version.note}</MetaText>}
+            <div className="mt-2 flex flex-wrap gap-1">
+              <Button size="sm" variant="ghost" onClick={() => setPreview(version)}>查看 v{version.version_number}</Button>
+              {version.id !== latest?.id && <Button size="sm" variant="ghost" disabled={busy} onClick={() => setRestoring(version)}><RotateCcw size={12} />恢复 v{version.version_number}</Button>}
             </div>
-          </Panel>}
+          </div>)}
         </div>
-      </div>
+      </aside>
     </div>
+    <Modal open={!!preview} onClose={() => setPreview(null)} title={`大纲历史 · v${preview?.version_number}`} width="max-w-4xl" footer={<Button variant="ghost" onClick={() => setPreview(null)}>关闭</Button>}>
+      <div className="paper-text min-h-40 whitespace-pre-wrap break-words" aria-label="历史大纲全文">{preview?.content || '此版本为空白大纲。'}</div>
+    </Modal>
+    <ConfirmModal open={!!restoring} onClose={() => { if (!busy) setRestoring(null) }} busy={busy} title={`恢复大纲 v${restoring?.version_number}？`} confirmText="恢复为新版本"
+      description={`将以此版本全文创建新的历史版本，已有历史仍然保留。${dirty ? '当前未保存的编辑将被替换。' : ''}`} onConfirm={() => restoring && void save(restoring)} />
   </div>
 }

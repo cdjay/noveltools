@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 const frontendDir = fileURLToPath(new URL('.', import.meta.url))
 const projectDir = resolve(frontendDir, '..')
 const backendDir = resolve(projectDir, 'backend')
-const testDataDir = resolve(projectDir, 'test_data', 'playwright')
+const testDataDir = resolve(projectDir, 'test_data', 'playwright', `run-${Date.now()}`)
 const testDatabasePath = resolve(testDataDir, 'noveltools.db').replace(/\\/g, '/')
 const frontendUrl = 'http://127.0.0.1:19517'
 const backendUrl = 'http://127.0.0.1:19518'

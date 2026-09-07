@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "小说状态工作台"
+    app_name: str = "小说写作工作台"
     database_url: str = "sqlite:///./data/noveltools.db"
     data_dir: Path = Path("./data")
     default_llm_base_url: str = "https://api.openai.com/v1"

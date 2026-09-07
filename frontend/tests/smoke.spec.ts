@@ -44,7 +44,7 @@ test('LLM 设置只提供普通 OpenAI Compatible 配置', async ({ page, reques
 
   await page.goto(`/books/${book.id}/settings`)
 
-  await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'LLM 配置' })).toBeVisible()
   await expect(page.getByText('WebAI-to-API')).toHaveCount(0)
   await expect(page.getByText('星月')).toHaveCount(0)
   await expect(page.getByText('API Key', { exact: true })).toBeVisible()

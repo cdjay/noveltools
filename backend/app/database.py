@@ -1,7 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -21,6 +21,14 @@ def _database_url() -> str:
 
 
 engine = create_engine(_database_url(), connect_args={"check_same_thread": False})
+
+
+@event.listens_for(engine, "connect")
+def enable_foreign_keys(connection, _record):
+    # SQLite otherwise ignores ON DELETE CASCADE and leaves versions behind.
+    connection.execute("PRAGMA foreign_keys=ON")
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
