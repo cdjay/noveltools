@@ -9,6 +9,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..llm_errors import llm_http_error
 from ..models import Chapter, LLMProvider
 from ..schemas import ChapterOut
 from ..services import content_sha256, serialize_chapter
@@ -134,7 +135,7 @@ async def update_summary(chapter_id: int, db: Session, *, skip_unchanged: bool =
         return result("completed", "本章梗概已生成并保存。")
     except httpx.HTTPStatusError as exc:
         db.rollback()
-        return result("failed", f"模型接口返回 HTTP {exc.response.status_code}，请检查 LLM 配置。")
+        return result("failed", llm_http_error(exc, model))
     except httpx.RequestError:
         db.rollback()
         return result("failed", "模型连接失败或超时，请检查 LLM 配置后重试。")

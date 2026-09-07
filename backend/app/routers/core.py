@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..llm_errors import llm_http_error
 from ..models import Book, Chapter, ChapterVersion, LLMProvider
 from ..schemas import (BookCreate, BookOut, BookUpdate, ChapterCreate, ChapterOut,
                        ChapterReorder, ChapterUpdate, ChapterVersionOut,
@@ -272,7 +273,7 @@ async def test_provider(provider_id: int, db: Session = Depends(get_db)):
         if isinstance(exc, httpx.TimeoutException):
             return {"ok": False, "message": f"连接 LLM 接口超时（{item.timeout} 秒）。请检查服务状态或 Base URL。"}
         if isinstance(exc, httpx.HTTPStatusError):
-            return {"ok": False, "message": f"LLM 接口返回 HTTP {exc.response.status_code}。请检查服务状态和接口地址 {item.base_url}。"}
+            return {"ok": False, "message": llm_http_error(exc, item.model)}
         return {"ok": False, "message": str(exc) or exc.__class__.__name__}
 
 

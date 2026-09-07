@@ -91,7 +91,7 @@ function ModelSettings() {
         <div className="max-w-2xl space-y-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field label="名称"><Input value={form.provider_name} onChange={event => setForm({ ...form, provider_name: event.target.value })} /></Field>
-            <Field label="模型名"><Input value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></Field>
+            <Field label="模型名" hint="按服务模型列表填写完整 ID，注意大小写。"><Input value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></Field>
           </div>
           <Field label="Base URL"><Input value={form.base_url} onChange={event => setForm({ ...form, base_url: event.target.value })} /></Field>
           <Field label="API Key" hint={selected?.has_api_key ? '已设置，留空表示保留原值。' : '密钥只写入本地数据库，不会在前端回显。'}>
