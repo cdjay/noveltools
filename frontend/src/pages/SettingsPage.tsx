@@ -38,6 +38,24 @@ function ModelSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [models, setModels] = useState<string[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
+  const fetchModels = async () => {
+    if (!selected) return
+    setFetchingModels(true); setError('')
+    try { setModels(await api<string[]>(`/llm/providers/${selected.id}/models`)) }
+    catch (exc) { setError(String(exc)) }
+    finally { setFetchingModels(false) }
+  }
+  const remove = async (keyOnly: boolean) => {
+    if (!selected || !window.confirm(keyOnly ? '清除已保存的 API Key 并停用此配置？' : `删除「${selected.provider_name}」配置？`)) return
+    try {
+      await api(`/llm/providers/${selected.id}${keyOnly ? '/key' : ''}`, { method: 'DELETE' })
+      const next = await api<Provider[]>('/llm/providers')
+      setItems(next); edit(keyOnly ? next.find(item => item.id === selected.id) || null : null)
+      toast(keyOnly ? '密钥已清除，配置已停用' : '配置已删除')
+    } catch (exc) { setError(String(exc)) }
+  }
 
   const load = async () => {
     setLoading(true); setError('')
@@ -49,7 +67,7 @@ function ModelSettings() {
 
   const edit = (item: Provider | null) => {
     setSelected(item); setForm(item ? formFromProvider(item) : { ...defaultForm })
-    setMessage(''); setError('')
+    setMessage(''); setError(''); setModels([])
   }
   const save = async () => {
     setError(''); setSaving(true)
@@ -57,7 +75,7 @@ function ModelSettings() {
       const item = selected
         ? await api<Provider>(`/llm/providers/${selected.id}`, { method: 'PUT', body: JSON.stringify(form) })
         : await api<Provider>('/llm/providers', { method: 'POST', body: JSON.stringify(form) })
-      setItems(previous => selected ? previous.map(value => value.id === item.id ? item : value) : [item, ...previous])
+      setItems(await api<Provider[]>('/llm/providers'))
       edit(item); toast('配置已保存；API Key 只保存、不回显。')
     } catch (exc) { setError(exc instanceof Error ? exc.message : '保存配置失败') } finally { setSaving(false) }
   }
@@ -73,6 +91,7 @@ function ModelSettings() {
   if (loading) return <Loading text="正在读取模型设置…" />
 
   return <div className="space-y-4">
+    <InlineNotice tone="accent" message={`当前生成模型：${items.find(item => item.enabled && item.has_api_key)?.model || '未启用可用模型'}。启用一个配置会停用其他配置。`} />
     {message && <InlineNotice tone="accent" message={message} />}
     {error && <InlineError message={error} />}
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
@@ -91,8 +110,10 @@ function ModelSettings() {
         <div className="max-w-2xl space-y-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field label="名称"><Input value={form.provider_name} onChange={event => setForm({ ...form, provider_name: event.target.value })} /></Field>
-            <Field label="模型名" hint="按服务模型列表填写完整 ID，注意大小写。"><Input value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></Field>
+            <Field label="模型名" hint="按服务模型列表填写完整 ID，注意大小写。"><Input list="provider-model-ids" value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></Field>
           </div>
+          <datalist id="provider-model-ids">{models.map(model => <option key={model} value={model} />)}</datalist>
+          <div className="flex items-center gap-2"><Button size="sm" variant="secondary" disabled={!selected || fetchingModels} onClick={() => void fetchModels()}>{fetchingModels ? '读取中…' : '读取可用模型'}</Button><MetaText>{models.length ? `已读取 ${models.length} 个模型，请在模型名中选择。` : '读取使用已保存的地址与密钥。'}</MetaText></div>
           <Field label="Base URL"><Input value={form.base_url} onChange={event => setForm({ ...form, base_url: event.target.value })} /></Field>
           <Field label="API Key" hint={selected?.has_api_key ? '已设置，留空表示保留原值。' : '密钥只写入本地数据库，不会在前端回显。'}>
             <Input type="password" value={form.api_key} onChange={event => setForm({ ...form, api_key: event.target.value })} placeholder={selected?.has_api_key ? '留空保留原值' : 'sk-…'} />
@@ -105,9 +126,10 @@ function ModelSettings() {
           <label className="flex items-center gap-2 text-body text-ink-soft">
             <input type="checkbox" className="accent-accent-600" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} />启用此配置
           </label>
-          <div className="flex gap-2 border-t border-line-soft pt-4">
+          <div className="flex flex-wrap gap-2 border-t border-line-soft pt-4">
             <Button variant="primary" disabled={saving} onClick={() => void save()}>{saving ? '保存中…' : '保存配置'}</Button>
             <Button variant="secondary" disabled={!selected || testing} onClick={() => void test()}><PlugZap size={14} />{testing ? '测试中…' : '测试连接'}</Button>
+            {selected && <><Button variant="ghost" disabled={saving || !selected.has_api_key} onClick={() => void remove(true)}>清除密钥</Button><Button variant="danger" disabled={saving} onClick={() => void remove(false)}>删除配置</Button></>}
           </div>
         </div>
       </Panel>

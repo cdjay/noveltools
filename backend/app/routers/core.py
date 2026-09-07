@@ -240,6 +240,8 @@ def _serialize_provider(item: LLMProvider) -> dict[str, Any]:
 
 @router.post("/llm/providers", response_model=LLMProviderOut)
 def create_provider(payload: LLMProviderCreate, db: Session = Depends(get_db)):
+    if payload.enabled:
+        db.execute(update(LLMProvider).where(LLMProvider.provider_type == "openai_compatible").values(enabled=False))
     item = LLMProvider(**payload.model_dump())
     db.add(item)
     db.commit()
@@ -252,6 +254,8 @@ def update_provider(provider_id: int, payload: LLMProviderCreate, db: Session = 
     item = db.get(LLMProvider, provider_id)
     if not item or item.provider_type != "openai_compatible":
         raise HTTPException(404, "LLM 配置不存在")
+    if payload.enabled:
+        db.execute(update(LLMProvider).where(LLMProvider.provider_type == "openai_compatible", LLMProvider.id != provider_id).values(enabled=False))
     values = payload.model_dump()
     if not values["api_key"] and item.api_key:
         values["api_key"] = item.api_key
@@ -260,6 +264,46 @@ def update_provider(provider_id: int, payload: LLMProviderCreate, db: Session = 
     db.commit()
     db.refresh(item)
     return _serialize_provider(item)
+
+
+@router.delete("/llm/providers/{provider_id}")
+def delete_provider(provider_id: int, db: Session = Depends(get_db)):
+    item = db.get(LLMProvider, provider_id)
+    if not item or item.provider_type != "openai_compatible":
+        raise HTTPException(404, "LLM 配置不存在")
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/llm/providers/{provider_id}/key")
+def clear_provider_key(provider_id: int, db: Session = Depends(get_db)):
+    item = db.get(LLMProvider, provider_id)
+    if not item or item.provider_type != "openai_compatible":
+        raise HTTPException(404, "LLM 配置不存在")
+    item.api_key = ""
+    item.enabled = False
+    db.commit()
+    return _serialize_provider(item)
+
+
+@router.get("/llm/providers/{provider_id}/models")
+async def provider_models(provider_id: int, db: Session = Depends(get_db)):
+    item = db.get(LLMProvider, provider_id)
+    if not item or item.provider_type != "openai_compatible":
+        raise HTTPException(404, "LLM 配置不存在")
+    if not item.api_key:
+        raise HTTPException(400, "请先保存 API Key。")
+    try:
+        async with httpx.AsyncClient(timeout=item.timeout) as client:
+            response = await client.get(item.base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {item.api_key}"})
+            response.raise_for_status()
+        values = response.json()["data"]
+        return sorted({entry["id"] for entry in values if isinstance(entry, dict) and isinstance(entry.get("id"), str)})
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(400, llm_http_error(exc, item.model))
+    except (httpx.RequestError, ValueError, KeyError, TypeError):
+        raise HTTPException(400, "无法读取模型列表，请检查服务地址；也可手动填写模型 ID。")
 
 
 @router.post("/llm/providers/{provider_id}/test")

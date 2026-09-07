@@ -42,7 +42,7 @@ def summary_provider(db: Session) -> LLMProvider | None:
     providers = db.scalars(select(LLMProvider).where(
         LLMProvider.provider_type == "openai_compatible", LLMProvider.api_key != ""
     ).order_by(LLMProvider.updated_at.desc(), LLMProvider.id.desc())).all()
-    return next((provider for provider in providers if provider.enabled), providers[0] if len(providers) == 1 else None)
+    return next((provider for provider in providers if provider.enabled), None)
 
 
 def normalize_summary(raw: str) -> str:
