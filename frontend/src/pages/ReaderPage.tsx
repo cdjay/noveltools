@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AArrowDown, AArrowUp, BookOpenText, Eye, FileDiff, FilePlus2, History, ListFilter, Maximize2, Minimize2, PanelLeft, PanelRight, PenLine, RotateCcw, Save, Trash2, Upload } from 'lucide-react'
+import { AArrowDown, AArrowUp, BookOpenText, Eye, FileDiff, FilePlus2, History, ListFilter, Maximize2, Minimize2, PanelLeft, PanelRight, PenLine, RotateCcw, Save, Trash2 } from 'lucide-react'
 import { diff_match_patch } from 'diff-match-patch'
-import { api, upload } from '../api/client'
+import { api } from '../api/client'
 import { useAppStore } from '../stores/useAppStore'
 import { useUiPrefs } from '../stores/useUiPrefs'
 import type { Chapter, Version, SummaryResult } from '../types'
 import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, MetaText, Modal, Panel, SectionTitle, Select, StatusBadge, Textarea, toast } from '../lib/ui'
+import { ImportChapters } from '../lib/ImportChapters'
+import { ReorderChapters } from '../lib/ReorderChapters'
 import { SummaryTaskPanel } from '../lib/SummaryTaskPanel'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
 
@@ -39,7 +41,6 @@ export function ReaderPage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [pendingSwitch, setPendingSwitch] = useState<Chapter | null>(null)
-  const fileInput = useRef<HTMLInputElement>(null)
   const readScrollRef = useRef<HTMLDivElement>(null)
   const positionTimer = useRef<number | undefined>(undefined)
   const pendingPosition = useRef<{ id: number; top: number } | null>(null)
@@ -150,13 +151,9 @@ export function ReaderPage() {
     const next = [...chapters, chapter]; setChapters(next); void applyChapter(chapter)
     toast(`已创建「${chapter.title}」`)
   }
-  const importFile = async (file: File) => {
-    if (!currentBook || (dirty && !window.confirm('放弃当前未保存的修改并导入正文？'))) return
-    try {
-      const added = await upload<Chapter[]>(`/books/${currentBook.id}/chapters/import`, file)
-      const next = [...chapters, ...added]; setChapters(next); void applyChapter(added[0])
-      toast(`已导入 ${added.length} 个章节`)
-    } catch (exc) { setError(String(exc)); toast('导入失败', 'danger') }
+  const imported = (added: Chapter[]) => {
+    setChapters([...useAppStore.getState().chapters, ...added])
+    if (added[0]) void applyChapter(added[0])
   }
   const removeChapter = async () => {
     if (!currentChapter) return
@@ -231,14 +228,12 @@ export function ReaderPage() {
   if (chapters.length === 0) return <div className="flex h-full items-center justify-center p-8">
     <Empty icon={<BookOpenText size={24} />} title="这本书还没有章节" text="新建第一章开始写作，或导入已有的 TXT / Markdown 正文。" action={
       <div className="flex gap-2">
-        <input ref={fileInput} type="file" accept=".txt,.md,.markdown" className="hidden" onChange={e => e.target.files?.[0] && void importFile(e.target.files[0])} />
-        <Button variant="secondary" onClick={() => fileInput.current?.click()}><Upload size={15} />导入正文</Button>
+        {currentBook && <ImportChapters bookId={currentBook.id} disabled={false} onImported={imported} />}
         <Button variant="primary" onClick={() => void createChapter()}><FilePlus2 size={15} />新建第一章</Button>
       </div>} />
   </div>
 
   return <div className="relative flex h-full min-h-0">
-    <input ref={fileInput} type="file" accept=".txt,.md,.markdown" className="hidden" onChange={e => e.target.files?.[0] && void importFile(e.target.files[0])} />
 
     {/* 左栏：章节列表 */}
     {showChapters && <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-paper-raised" aria-label="章节列表">
@@ -268,7 +263,7 @@ export function ReaderPage() {
       </div>
       <div className="border-t border-line-soft p-2.5">
         {currentBook && <SummaryTaskPanel bookId={currentBook.id} disabled={dirty || saving || summarizing} onBusy={setBatchSummarizing} onProgress={() => void refreshSummaries()} />}
-        <Button variant="ghost" size="sm" className="mt-1 w-full" onClick={() => fileInput.current?.click()}><Upload size={13} />导入 TXT / Markdown</Button>
+        {currentBook && <div className="mt-1 flex flex-col"><ImportChapters bookId={currentBook.id} disabled={dirty || saving || loadingChapter} onImported={imported} /><ReorderChapters bookId={currentBook.id} chapters={chapters} disabled={dirty || saving || loadingChapter} onSaved={next => { setChapters(next); if (currentChapter) { const fresh = next.find(item => item.id === currentChapter.id); if (fresh) setCurrentChapter({ ...currentChapter, chapter_number: fresh.chapter_number }) } }} /></div>}
       </div>
     </aside>}
 

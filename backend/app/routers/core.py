@@ -10,10 +10,11 @@ from sqlalchemy.orm import Session, defer
 
 from ..database import get_db
 from ..llm_errors import llm_http_error
+from ..text_import import decode_text, split_chapters
 from ..models import Book, Chapter, ChapterVersion, LLMProvider
 from ..schemas import (BookCreate, BookOut, BookUpdate, ChapterCreate, ChapterOut,
                        ChapterReorder, ChapterUpdate, ChapterVersionOut,
-                       LLMProviderCreate, LLMProviderOut, VersionCreate)
+                       LLMProviderCreate, LLMProviderOut, VersionCreate, ChapterImport)
 from ..services import (count_words, next_chapter_number, next_version_number,
                         read_content, save_content, serialize_book, serialize_chapter)
 
@@ -84,6 +85,14 @@ def list_chapters(book_id: int, include_content: bool = True, db: Session = Depe
 
 @router.post("/books/{book_id}/chapters", response_model=ChapterOut)
 def create_chapter(book_id: int, payload: ChapterCreate, db: Session = Depends(get_db)):
+    db.execute(update(Book).where(Book.id == book_id).values(id=Book.id))
+    chapter = add_chapter(book_id, payload, db)
+    db.commit()
+    db.refresh(chapter)
+    return serialize_chapter(chapter, db)
+
+
+def add_chapter(book_id: int, payload: ChapterCreate, db: Session):
     book = require_book(db, book_id)
     number = payload.chapter_number or next_chapter_number(db, book_id)
     chapter = Chapter(book_id=book_id, chapter_number=number, title=payload.title, status=payload.status, word_count=count_words(payload.content))
@@ -96,19 +105,33 @@ def create_chapter(book_id: int, payload: ChapterCreate, db: Session = Depends(g
     chapter.current_version_id = version.id
     if not book.current_chapter_id:
         book.current_chapter_id = chapter.id
-    db.commit()
-    db.refresh(chapter)
-    return serialize_chapter(chapter, db)
+    db.flush()
+    return chapter
 
 
 @router.post("/books/{book_id}/chapters/import", response_model=list[ChapterOut])
 async def import_chapters(book_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
     require_book(db, book_id)
-    raw = await file.read()
-    text = raw.decode("utf-8-sig", errors="replace")
+    raw = await file.read(30 * 1024 * 1024 + 1)
+    text, _ = decode_text(raw)
     title = Path(file.filename or "导入章节").stem
-    chapter = create_chapter(book_id, ChapterCreate(title=title, content=text, source="imported"), db)
-    return [chapter]
+    return confirm_import(book_id, ChapterImport(chapters=split_chapters(text, title)), db)
+
+
+@router.post("/books/{book_id}/chapters/import/preview")
+async def preview_import(book_id: int, split: bool = True, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    require_book(db, book_id)
+    text, encoding = decode_text(await file.read(30 * 1024 * 1024 + 1))
+    return {"encoding": encoding, "chapters": split_chapters(text, Path(file.filename or "导入章节").stem, split)}
+
+
+@router.post("/books/{book_id}/chapters/import/confirm", response_model=list[ChapterOut])
+def confirm_import(book_id: int, payload: ChapterImport, db: Session = Depends(get_db)):
+    db.execute(update(Book).where(Book.id == book_id).values(id=Book.id))
+    require_book(db, book_id)
+    chapters = [add_chapter(book_id, ChapterCreate(title=item.title, content=item.content, source="imported"), db) for item in payload.chapters]
+    db.commit()
+    return [serialize_chapter(chapter, db, False) for chapter in chapters]
 
 
 @router.get("/chapters/{chapter_id}", response_model=ChapterOut)
@@ -142,6 +165,7 @@ def delete_chapter(chapter_id: int, confirm: bool = False, db: Session = Depends
 
 @router.post("/books/{book_id}/chapters/reorder")
 def reorder_chapters(book_id: int, payload: ChapterReorder, db: Session = Depends(get_db)):
+    db.execute(update(Book).where(Book.id == book_id).values(id=Book.id))
     require_book(db, book_id)
     chapters = db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.chapter_number)).all()
     known = {chapter.id: chapter for chapter in chapters}
@@ -154,7 +178,7 @@ def reorder_chapters(book_id: int, payload: ChapterReorder, db: Session = Depend
     for index, chapter_id in enumerate(payload.chapter_ids, start=1):
         known[chapter_id].chapter_number = index
     db.commit()
-    return [serialize_chapter(known[chapter_id], db) for chapter_id in payload.chapter_ids]
+    return [serialize_chapter(known[chapter_id], db, False) for chapter_id in payload.chapter_ids]
 
 
 @router.post("/chapters/{chapter_id}/versions", response_model=ChapterVersionOut)

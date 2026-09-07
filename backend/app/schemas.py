@@ -67,6 +67,10 @@ class ChapterReorder(BaseModel):
     chapter_ids: list[int]
 
 
+class ChapterImport(BaseModel):
+    chapters: list[ChapterCreate] = Field(min_length=1, max_length=10000)
+
+
 class ChapterVersionOut(ORMModel):
     id: int
     chapter_id: int
