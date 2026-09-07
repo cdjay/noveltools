@@ -57,6 +57,8 @@ class ChapterUpdate(BaseModel):
 
 class VersionCreate(BaseModel):
     content: str
+    base_version_id: int | None = None
+    title: str | None = None
     source: str = "manual"
     note: str = ""
 

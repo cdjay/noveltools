@@ -55,6 +55,7 @@ class ChapterVersion(Base):
     chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), index=True)
     version_number: Mapped[int] = mapped_column(Integer)
     content_path: Mapped[str] = mapped_column(String(800))
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     word_count: Mapped[int] = mapped_column(Integer, default=0)
     source: Mapped[str] = mapped_column(String(30), default="manual")
     note: Mapped[str] = mapped_column(Text, default="")

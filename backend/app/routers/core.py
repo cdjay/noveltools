@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -90,8 +90,7 @@ def create_chapter(book_id: int, payload: ChapterCreate, db: Session = Depends(g
     db.add(chapter)
     db.flush()
     version_number = 1
-    path = save_content(book_id, chapter.id, version_number, payload.content)
-    version = ChapterVersion(chapter_id=chapter.id, version_number=version_number, content_path=path, word_count=count_words(payload.content), source=payload.source, note=payload.note)
+    version = ChapterVersion(chapter_id=chapter.id, version_number=version_number, content_path="", content_text=payload.content, word_count=count_words(payload.content), source=payload.source, note=payload.note)
     db.add(version)
     db.flush()
     chapter.current_version_id = version.id
@@ -161,13 +160,21 @@ def reorder_chapters(book_id: int, payload: ChapterReorder, db: Session = Depend
 @router.post("/chapters/{chapter_id}/versions", response_model=ChapterVersionOut)
 def create_version(chapter_id: int, payload: VersionCreate, db: Session = Depends(get_db)):
     chapter = require_chapter(db, chapter_id)
+    # Acquire the database write lock and check the source revision before allocating a number.
+    base = payload.base_version_id if "base_version_id" in payload.model_fields_set else chapter.current_version_id
+    changed = db.execute(update(Chapter).where(Chapter.id == chapter_id, Chapter.current_version_id == base)
+                         .values(word_count=count_words(payload.content)))
+    if not changed.rowcount:
+        db.rollback()
+        raise HTTPException(409, "本章已在其他窗口更新。当前草稿已保留，请重新加载最新版本后再保存。")
     number = next_version_number(db, chapter_id)
-    path = save_content(chapter.book_id, chapter.id, number, payload.content)
-    version = ChapterVersion(chapter_id=chapter_id, version_number=number, content_path=path, word_count=count_words(payload.content), source=payload.source, note=payload.note)
+    version = ChapterVersion(chapter_id=chapter_id, version_number=number, content_path="", content_text=payload.content, word_count=count_words(payload.content), source=payload.source, note=payload.note)
     db.add(version)
     db.flush()
     chapter.current_version_id = version.id
     chapter.word_count = version.word_count
+    if payload.title is not None:
+        chapter.title = payload.title
     db.commit()
     db.refresh(version)
     return {**{column.name: getattr(version, column.name) for column in ChapterVersion.__table__.columns}, "content": payload.content}
@@ -191,12 +198,12 @@ def diff_versions(chapter_id: int, left: int, right: int, db: Session = Depends(
 
 
 @router.post("/chapters/{chapter_id}/versions/{version_id}/restore", response_model=ChapterVersionOut)
-def restore_version(chapter_id: int, version_id: int, db: Session = Depends(get_db)):
+def restore_version(chapter_id: int, version_id: int, base_version_id: int | None = None, db: Session = Depends(get_db)):
     chapter = require_chapter(db, chapter_id)
     version = db.get(ChapterVersion, version_id)
     if not version or version.chapter_id != chapter_id:
         raise HTTPException(404, "版本不存在或不属于当前章节")
-    restored = VersionCreate(content=read_content(version), source="revised", note=f"从 v{version.version_number} 恢复")
+    restored = VersionCreate(content=read_content(version), base_version_id=base_version_id if base_version_id is not None else chapter.current_version_id, source="revised", note=f"从 v{version.version_number} 恢复")
     return create_version(chapter_id, restored, db)
 
 

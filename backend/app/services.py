@@ -1,4 +1,5 @@
 import hashlib
+from fastapi import HTTPException
 from pathlib import Path
 from typing import Any
 from sqlalchemy import select
@@ -31,8 +32,13 @@ def save_content(book_id: int, chapter_id: int, version_number: int, content: st
 def read_content(version: ChapterVersion | None) -> str:
     if not version:
         return ""
+    if version.content_text is not None:
+        return version.content_text
     path = Path(version.content_path)
-    return path.read_text(encoding="utf-8") if path.exists() else ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        raise HTTPException(409, f"正文文件缺失或无法读取（版本 {version.id}），请从备份恢复文件。")
 
 
 def next_chapter_number(db: Session, book_id: int) -> int:

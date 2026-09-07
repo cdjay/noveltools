@@ -83,8 +83,8 @@ export function ReaderPage() {
     if (!currentChapter) return false
     setSaving(true); setError('')
     try {
-      const version = await api<Version>(`/chapters/${currentChapter.id}/versions`, { method: 'POST', body: JSON.stringify({ content, note: '阅读器手动保存' }) })
-      const updated = await api<Chapter>(`/chapters/${currentChapter.id}`, { method: 'PUT', body: JSON.stringify({ title }) })
+      const version = await api<Version>(`/chapters/${currentChapter.id}/versions`, { method: 'POST', body: JSON.stringify({ content, title, base_version_id: currentChapter.current_version_id, note: '阅读器手动保存' }) })
+      const updated = { ...currentChapter, title, current_content: content, current_version_id: version.id, word_count: version.word_count, summary_is_stale: !!currentChapter.summary }
       setCurrentChapter(updated); setChapters(chapters.map(item => item.id === updated.id ? updated : item))
       setVersions([version, ...versions])
       toast(`已保存为 v${version.version_number}，旧版本可恢复`)
@@ -120,7 +120,7 @@ export function ReaderPage() {
     if (!currentChapter || !restoring) return
     setRestoreBusy(true)
     try {
-      const version = await api<Version>(`/chapters/${currentChapter.id}/versions/${restoring.id}/restore`, { method: 'POST' })
+      const version = await api<Version>(`/chapters/${currentChapter.id}/versions/${restoring.id}/restore?base_version_id=${currentChapter.current_version_id}`, { method: 'POST' })
       const updated = await api<Chapter>(`/chapters/${currentChapter.id}`)
       setCurrentChapter(updated); setChapters(chapters.map(item => item.id === updated.id ? updated : item))
       setContent(version.content); setVersions([version, ...versions]); setRestoring(null)
