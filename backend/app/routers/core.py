@@ -16,7 +16,7 @@ from ..schemas import (BookCreate, BookOut, BookUpdate, ChapterCreate, ChapterOu
                        ChapterReorder, ChapterUpdate, ChapterVersionOut,
                        LLMProviderCreate, LLMProviderOut, VersionCreate, ChapterImport)
 from ..services import (count_words, next_chapter_number, next_version_number,
-                        read_content, save_content, serialize_book, serialize_chapter)
+                        read_content, serialize_book, serialize_chapter)
 
 router = APIRouter(prefix="/api")
 
@@ -62,6 +62,10 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
 @router.put("/books/{book_id}", response_model=BookOut)
 def update_book(book_id: int, payload: BookUpdate, db: Session = Depends(get_db)):
     book = require_book(db, book_id)
+    if payload.current_chapter_id is not None:
+        chapter = db.get(Chapter, payload.current_chapter_id)
+        if not chapter or chapter.book_id != book_id:
+            raise HTTPException(400, "阅读章节不属于当前书籍")
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(book, key, value)
     db.commit()
@@ -184,6 +188,9 @@ def reorder_chapters(book_id: int, payload: ChapterReorder, db: Session = Depend
 @router.post("/chapters/{chapter_id}/versions", response_model=ChapterVersionOut)
 def create_version(chapter_id: int, payload: VersionCreate, db: Session = Depends(get_db)):
     chapter = require_chapter(db, chapter_id)
+    book = require_book(db, chapter.book_id)
+    if book.current_chapter_id == chapter_id:
+        book.current_chapter_id = db.scalar(select(Chapter.id).where(Chapter.book_id == book.id, Chapter.id != chapter_id).order_by(Chapter.chapter_number))
     # Acquire the database write lock and check the source revision before allocating a number.
     base = payload.base_version_id if "base_version_id" in payload.model_fields_set else chapter.current_version_id
     changed = db.execute(update(Chapter).where(Chapter.id == chapter_id, Chapter.current_version_id == base)

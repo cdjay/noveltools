@@ -1,4 +1,5 @@
 import asyncio
+import time
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
@@ -69,3 +70,22 @@ def test_restart_waits_for_explicit_resume_and_retries_failed_only(monkeypatch):
     client.post(f"/api/summary-jobs/{job['id']}/resume")
     assert run(job)['updated'] == 3
     assert calls == ['0', '1', '2', '1']
+
+
+def test_lifespan_worker_processes_user_started_queue(monkeypatch):
+    calls = []
+    async def fake(provider, title, content):
+        calls.append(title)
+        return content
+    monkeypatch.setattr(summary, 'generate_summary', fake)
+    with TestClient(app) as running:
+        assert not calls
+        job = setup_job()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            current = running.get(f"/api/summary-jobs/{job['id']}").json()
+            if current['status'] == 'completed':
+                break
+            time.sleep(0.05)
+        assert current['status'] == 'completed'
+        assert calls == ['0', '1', '2']

@@ -1,13 +1,12 @@
 """Durable user-started jobs. Restarted work waits for an explicit resume."""
 import asyncio
-from contextlib import suppress
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, select, update
+from sqlalchemy import case, delete, select, update
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
-from ..models import Book, Chapter, LLMProvider, SummaryJob, SummaryJobItem, SummaryLease
+from ..models import Book, Chapter, SummaryJob, SummaryJobItem, SummaryLease
 from .core import require_book
 from .summary import summary_provider, update_summary
 
@@ -71,7 +70,7 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
 def cancel_job(job_id: int, db: Session = Depends(get_db)):
     job = require_job(job_id, db)
     db.execute(update(SummaryJob).where(SummaryJob.id == job_id, SummaryJob.status.in_(ACTIVE))
-               .values(status="cancelling"))
+               .values(status=case((SummaryJob.status == "queued", "cancelled"), else_="cancelling")))
     db.commit()
     db.refresh(job)
     return job_out(job, db)

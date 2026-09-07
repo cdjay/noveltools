@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .config import settings
 from .models import Book, Chapter, ChapterVersion
 
 
@@ -13,20 +12,6 @@ def count_words(text: str) -> int:
     chinese = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
     western = sum(1 for token in text.split() if any(char.isascii() and char.isalnum() for char in token))
     return chinese + western
-
-
-def content_root() -> Path:
-    root = settings.data_dir / "books"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def save_content(book_id: int, chapter_id: int, version_number: int, content: str) -> str:
-    path = content_root() / str(book_id) / "chapters" / str(chapter_id)
-    path.mkdir(parents=True, exist_ok=True)
-    target = path / f"v{version_number}.txt"
-    target.write_text(content, encoding="utf-8")
-    return str(target)
 
 
 def read_content(version: ChapterVersion | None) -> str:
@@ -56,6 +41,8 @@ def serialize_chapter(chapter: Chapter, db: Session, include_content: bool = Tru
         return {**{column.name: getattr(chapter, column.name) for column in Chapter.__table__.columns},
                 "summary_is_stale": bool(chapter.summary and chapter.summary_source_version_id != chapter.current_version_id)}
     version = db.get(ChapterVersion, chapter.current_version_id) if chapter.current_version_id else None
+    if not version and (chapter.current_version_id is not None or chapter.word_count):
+        raise HTTPException(409, "当前正文版本引用缺失，请从备份恢复。")
     content = read_content(version)
     return {**{column.name: getattr(chapter, column.name) for column in Chapter.__table__.columns},
             "current_content": content,

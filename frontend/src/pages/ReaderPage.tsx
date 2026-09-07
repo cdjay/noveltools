@@ -29,6 +29,7 @@ export function ReaderPage() {
   const [title, setTitle] = useState('')
   const [versions, setVersions] = useState<Version[]>([])
   const [saving, setSaving] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [summarizing, setSummarizing] = useState(false)
   const [batchSummarizing, setBatchSummarizing] = useState(false)
   const [error, setError] = useState('')
@@ -146,10 +147,16 @@ export function ReaderPage() {
     } catch (exc) { setError(String(exc)); toast('保存失败', 'danger'); return false } finally { setSaving(false) }
   }
   const createChapter = async () => {
-    if (!currentBook || (dirty && !window.confirm('放弃当前未保存的修改并新建章节？'))) return
-    const chapter = await api<Chapter>(`/books/${currentBook.id}/chapters`, { method: 'POST', body: JSON.stringify({ title: `第${chapters.length + 1}章`, content: '' }) })
-    const next = [...chapters, chapter]; setChapters(next); void applyChapter(chapter)
-    toast(`已创建「${chapter.title}」`)
+    if (!currentBook || creating || saving || loadingChapter || (dirty && !window.confirm('放弃当前未保存的修改并新建章节？'))) return
+    setCreating(true); setError('')
+    try {
+      const chapter = await api<Chapter>(`/books/${currentBook.id}/chapters`, { method: 'POST', body: JSON.stringify({ title: `第${chapters.length + 1}章`, content: '' }) })
+      if (useAppStore.getState().currentBook?.id !== currentBook.id) return
+      if (currentChapter && dirty) clearDraft(currentChapter.id)
+      setChapters([...useAppStore.getState().chapters, chapter]); void applyChapter(chapter)
+      toast(`已创建「${chapter.title}」`)
+    } catch (exc) { setError(String(exc)) }
+    finally { setCreating(false) }
   }
   const imported = (added: Chapter[]) => {
     setChapters([...useAppStore.getState().chapters, ...added])
@@ -167,14 +174,14 @@ export function ReaderPage() {
     } catch (exc) { setError(String(exc)) } finally { setDeleteBusy(false) }
   }
   const restoreVersion = async () => {
-    if (!currentChapter || !restoring) return
+    if (!currentChapter || !restoring || dirty || saving || loadingChapter) return
     setRestoreBusy(true)
     try {
       const version = await api<Version>(`/chapters/${currentChapter.id}/versions/${restoring.id}/restore?base_version_id=${currentChapter.current_version_id}`, { method: 'POST' })
       const updated = await api<Chapter>(`/chapters/${currentChapter.id}`)
       setCurrentChapter(updated); setChapters(chapters.map(item => item.id === updated.id ? updated : item))
       baseVersion.current = version.id; clearDraft(updated.id); setDraftRestored(false)
-      setContent(version.content); setVersions([version, ...versions]); setRestoring(null)
+      setContent(version.content); setTitle(updated.title); setVersions([version, ...versions]); setRestoring(null)
       toast(`已从 v${restoring.version_number} 恢复，生成新版本 v${version.version_number}`)
     } catch (exc) { setError(String(exc)) } finally { setRestoreBusy(false) }
   }
@@ -226,21 +233,22 @@ export function ReaderPage() {
   const showContext = prefs.readerShowContext && !focusMode
 
   if (chapters.length === 0) return <div className="flex h-full items-center justify-center p-8">
+    {error && <InlineError message={error} />}
     <Empty icon={<BookOpenText size={24} />} title="这本书还没有章节" text="新建第一章开始写作，或导入已有的 TXT / Markdown 正文。" action={
       <div className="flex gap-2">
         {currentBook && <ImportChapters bookId={currentBook.id} disabled={false} onImported={imported} />}
-        <Button variant="primary" onClick={() => void createChapter()}><FilePlus2 size={15} />新建第一章</Button>
+        <Button variant="primary" disabled={creating || saving || loadingChapter} onClick={() => void createChapter()}><FilePlus2 size={15} />新建第一章</Button>
       </div>} />
   </div>
 
   return <div className="relative flex h-full min-h-0">
 
     {/* 左栏：章节列表 */}
-    {showChapters && <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-paper-raised" aria-label="章节列表">
+    <aside className={`${showChapters ? 'flex' : 'hidden'} w-60 shrink-0 flex-col border-r border-line bg-paper-raised`} aria-label="章节列表">
       <div className="border-b border-line-soft p-3">
         <div className="flex items-center justify-between">
           <SectionTitle>章节 · {chapters.length}</SectionTitle>
-          <Button size="sm" variant="subtle" onClick={() => void createChapter()}><FilePlus2 size={13} />新建</Button>
+          <Button size="sm" variant="subtle" disabled={creating || saving || loadingChapter} onClick={() => void createChapter()}><FilePlus2 size={13} />新建</Button>
         </div>
         <div className="relative mt-2.5">
           <ListFilter size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint" />
@@ -265,7 +273,7 @@ export function ReaderPage() {
         {currentBook && <SummaryTaskPanel bookId={currentBook.id} disabled={dirty || saving || summarizing} onBusy={setBatchSummarizing} onProgress={() => void refreshSummaries()} />}
         {currentBook && <div className="mt-1 flex flex-col"><ImportChapters bookId={currentBook.id} disabled={dirty || saving || loadingChapter} onImported={imported} /><ReorderChapters bookId={currentBook.id} chapters={chapters} disabled={dirty || saving || loadingChapter} onSaved={next => { setChapters(next); if (currentChapter) { const fresh = next.find(item => item.id === currentChapter.id); if (fresh) setCurrentChapter({ ...currentChapter, chapter_number: fresh.chapter_number }) } }} /></div>}
       </div>
-    </aside>}
+    </aside>
 
     {/* 中栏：正文 */}
     <div className="flex min-w-0 flex-1 flex-col bg-paper">
@@ -297,8 +305,8 @@ export function ReaderPage() {
       {currentChapter ? (
         editing ? <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
           <div className="mx-auto w-full max-w-measure flex-1 px-6 py-6">
-            <Input className="border-transparent bg-transparent px-0 font-serif text-lg font-semibold focus:border-line" disabled={saving || loadingChapter} value={title} onChange={e => { setTitle(e.target.value); rememberDraft(content, e.target.value) }} aria-label="章节标题" placeholder="章节标题" />
-            <Textarea className="paper-text mt-3 min-h-[60vh] resize-y border-0 bg-transparent px-0 shadow-none focus:border-transparent" style={{ fontSize: prefs.readerFontSize }} disabled={saving || loadingChapter} value={content} onChange={e => { setContent(e.target.value); rememberDraft(e.target.value, title) }} placeholder="从这里开始写正文，或导入已有章节…" aria-label="章节正文" />
+            <Input className="border-transparent bg-transparent px-0 font-serif text-lg font-semibold focus:border-line" disabled={saving || restoreBusy || loadingChapter} value={title} onChange={e => { setTitle(e.target.value); rememberDraft(content, e.target.value) }} aria-label="章节标题" placeholder="章节标题" />
+            <Textarea className="paper-text mt-3 min-h-[60vh] resize-y border-0 bg-transparent px-0 shadow-none focus:border-transparent" style={{ fontSize: prefs.readerFontSize }} disabled={saving || restoreBusy || loadingChapter} value={content} onChange={e => { setContent(e.target.value); rememberDraft(e.target.value, title) }} placeholder="从这里开始写正文，或导入已有章节…" aria-label="章节正文" />
           </div>
         </div>
         : <div ref={readScrollRef} onScroll={recordPosition} className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
@@ -337,7 +345,7 @@ export function ReaderPage() {
                 </div>
                 <MetaText className="mt-0.5">{version.word_count.toLocaleString()} 字 · {new Date(version.created_at).toLocaleString()}</MetaText>
                 {version.note && <MetaText className="mt-0.5">{version.note}</MetaText>}
-                {!isCurrent && <Button size="sm" variant="ghost" className="mt-1 px-1.5 text-accent-700" onClick={() => setRestoring(version)}><RotateCcw size={12} />恢复到此版本</Button>}
+                {!isCurrent && <Button size="sm" variant="ghost" className="mt-1 px-1.5 text-accent-700" disabled={dirty || saving || loadingChapter} onClick={() => setRestoring(version)}><RotateCcw size={12} />恢复到此版本</Button>}
               </div>
             })}
           </div>

@@ -146,6 +146,8 @@ export function Modal({ open, onClose, title, description, children, footer, wid
   open: boolean; onClose: () => void; title: ReactNode; description?: string; children: ReactNode; footer?: ReactNode; width?: string
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
   useEffect(() => {
     if (!open) return
     const previous = document.activeElement as HTMLElement | null
@@ -153,7 +155,7 @@ export function Modal({ open, onClose, title, description, children, footer, wid
     const focusable = box?.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
     focusable?.focus()
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.stopPropagation(); onClose() }
+      if (event.key === 'Escape') { event.stopPropagation(); closeRef.current() }
       if (event.key === 'Tab' && box) {
         const items = Array.from(box.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter(el => !el.hasAttribute('disabled'))
         if (!items.length) return
@@ -164,7 +166,7 @@ export function Modal({ open, onClose, title, description, children, footer, wid
     }
     document.addEventListener('keydown', onKey, true)
     return () => { document.removeEventListener('keydown', onKey, true); previous?.focus() }
-  }, [open, onClose])
+  }, [open])
   if (!open) return null
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/35 p-4 anim-fade" onMouseDown={event => event.target === event.currentTarget && onClose()}>
