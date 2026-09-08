@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, update, delete
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..llm_errors import llm_http_error
 from ..llm_timeout import llm_timeout
+from ..llm_routing import resolve_provider
 from ..models import Chapter, LLMProvider, SummaryLease
 from ..schemas import ChapterOut
 from ..services import content_sha256, serialize_chapter
@@ -39,12 +40,8 @@ class SummaryBatchResult(BaseModel):
     results: list[SummaryResult]
 
 
-def summary_provider(db: Session) -> LLMProvider | None:
-    providers = db.scalars(select(LLMProvider).where(
-        LLMProvider.provider_type == "openai_compatible", LLMProvider.api_key != ""
-    ).order_by(LLMProvider.updated_at.desc(), LLMProvider.id.desc())).all()
-    return next((provider for provider in providers if provider.enabled), None)
-
+def summary_provider(db: Session, module: str = "chapter_summary") -> LLMProvider | None:
+    return resolve_provider(db, module)
 
 def normalize_summary(raw: str) -> str:
     text = raw.strip()
@@ -136,9 +133,12 @@ async def _update_summary(chapter_id: int, db: Session, *, skip_unchanged: bool 
         return result("skipped", "本章没有正文，已跳过。")
     if skip_unchanged and chapter.summary and chapter.summary_content_sha256 == sha:
         return result("skipped", "正文未变化，保留已有梗概。")
-    provider = db.get(LLMProvider, provider_id) if provider_id is not None else summary_provider(db)
-    if not provider or not provider.enabled or not provider.api_key:
-        return result("failed", "请先在 LLM 配置中保存 API Key 并启用一个模型。")
+    try:
+        provider = db.get(LLMProvider, provider_id) if provider_id is not None else summary_provider(db)
+    except HTTPException as exc:
+        return result("failed", str(exc.detail))
+    if not provider or provider.provider_type != "openai_compatible" or not provider.api_key:
+        return result("failed", "请在 LLM 配置中设置可用的默认模型或模块分流。")
     if config:
         provider = LLMProvider(**config, api_key=provider.api_key)
     model = provider.model
@@ -173,11 +173,16 @@ async def summarize_chapter(chapter_id: int, db: Session = Depends(get_db)):
 async def summarize_book(book_id: int, db: Session = Depends(get_db)):
     require_book(db, book_id)
     ids = list(db.scalars(select(Chapter.id).where(Chapter.book_id == book_id).order_by(Chapter.chapter_number)))
+    provider = summary_provider(db, "batch_summary")
+    if not provider:
+        raise HTTPException(400, "请在 LLM 配置中设置可用的默认模型或批量梗概分流。")
+    provider_id = provider.id
+    config = {key: getattr(provider, key) for key in ("model", "base_url", "temperature", "max_tokens", "timeout")}
     results = []
     for chapter_id in ids:
         if db.get(Chapter, chapter_id, populate_existing=True) is None:
             results.append(SummaryResult(chapter_id=chapter_id, status="skipped", updated=False, skipped=True, message="章节已删除，跳过。"))
             continue
-        results.append(await update_summary(chapter_id, db, skip_unchanged=True))
+        results.append(await update_summary(chapter_id, db, skip_unchanged=True, provider_id=provider_id, config=config))
     return SummaryBatchResult(book_id=book_id, total=len(results), updated=sum(item.updated for item in results),
                               skipped=sum(item.skipped for item in results), failed=sum(item.status == "failed" for item in results), results=results)

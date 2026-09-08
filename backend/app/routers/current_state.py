@@ -192,7 +192,11 @@ def get_current(book_id: int, db: Session = Depends(get_db)):
 
 @router.get("/context")
 def get_context(book_id: int, db: Session = Depends(get_db)):
-    provider = summary_provider(db)
+    provider_error = None
+    try:
+        provider = summary_provider(db, "current_state")
+    except HTTPException as exc:
+        provider, provider_error = None, str(exc.detail)
     try:
         manifest, context = snapshot(db, book_id)
     except HTTPException as exc:
@@ -202,7 +206,7 @@ def get_context(book_id: int, db: Session = Depends(get_db)):
                 "missing_summary_chapter_ids": [], "stale_summary_chapter_ids": [], "input_characters": 0,
                 "model": provider.model if provider else None, "max_output_tokens": provider.max_tokens if provider else None,
                 "timeout_seconds": provider.timeout if provider else None,
-                "source_error": str(exc.detail)}
+                "source_error": str(exc.detail), "provider_error": provider_error}
     return {"body_chapters": [{k: value for k, value in c.items() if k != "content"} for c in context["recent_chapters"]],
             "outline": {"version_number": context["outline"]["version_number"],
                         "characters": len(context["outline"]["content"]),
@@ -212,7 +216,7 @@ def get_context(book_id: int, db: Session = Depends(get_db)):
             "stale_summary_chapter_ids": manifest["stale_summary_chapter_ids"],
             "input_characters": len(json.dumps(context, ensure_ascii=False)), "model": provider.model if provider else None,
             "max_output_tokens": provider.max_tokens if provider else None,
-            "timeout_seconds": provider.timeout if provider else None}
+            "timeout_seconds": provider.timeout if provider else None, "provider_error": provider_error}
 
 
 @router.get("/export.md")
@@ -290,9 +294,9 @@ async def call_model(provider, prompt, context):
 async def generate(book_id: int, payload: StateBase, db: Session = Depends(get_db)):
     lock_book(db, book_id)
     check_base(db, book_id, payload.base_version_id)
-    provider = summary_provider(db)
+    provider = summary_provider(db, "current_state")
     if not provider:
-        raise HTTPException(400, "请先在 LLM 配置中启用一个带 API Key 的模型。")
+        raise HTTPException(400, "请在 LLM 配置中设置可用的默认模型或当前状态速查分流。")
     manifest, context = snapshot(db, book_id)
     if not context["recent_chapters"]:
         raise HTTPException(400, "本书还没有章节，请先创建或导入正文。")

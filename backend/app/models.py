@@ -437,6 +437,14 @@ class ChangeLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class LLMModuleRoute(Base):
+    __tablename__ = "llm_module_routes"
+    module: Mapped[str] = mapped_column(String(60), primary_key=True)
+    provider_id: Mapped[int | None] = mapped_column(ForeignKey("llm_providers.id", ondelete="SET NULL"), nullable=True)
+    use_default: Mapped[bool] = mapped_column(Boolean, default=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
 class LLMProvider(Base):
     __tablename__ = "llm_providers"
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -41,9 +41,9 @@ def create_job(book_id: int, db: Session = Depends(get_db)):
     active = db.scalar(select(SummaryJob).where(SummaryJob.book_id == book_id, SummaryJob.status.in_(ACTIVE)))
     if active:
         return job_out(active, db)
-    provider = summary_provider(db)
-    if not provider or not provider.enabled:
-        raise HTTPException(400, "请先保存 API Key 并启用一个模型。")
+    provider = summary_provider(db, "batch_summary")
+    if not provider:
+        raise HTTPException(400, "请设置可用的默认模型或批量梗概分流。")
     job = SummaryJob(book_id=book_id, provider_id=provider.id, model=provider.model, provider_config=provider_config(provider))
     db.add(job)
     db.flush()
@@ -84,9 +84,9 @@ def resume_job(job_id: int, db: Session = Depends(get_db)):
     active = db.scalar(select(SummaryJob).where(SummaryJob.book_id == job.book_id, SummaryJob.status.in_(ACTIVE)))
     if active:
         raise HTTPException(409, "这本书已有任务运行，请等待完成。")
-    provider = summary_provider(db)
-    if not provider or not provider.enabled:
-        raise HTTPException(400, "请先启用一个可用模型。")
+    provider = summary_provider(db, "batch_summary")
+    if not provider:
+        raise HTTPException(400, "请设置可用的默认模型或批量梗概分流。")
     db.execute(update(SummaryJobItem).where(SummaryJobItem.job_id == job_id, SummaryJobItem.status.in_(("failed", "running", "pending")))
                .values(status="pending", message=""))
     job.status = "queued"
