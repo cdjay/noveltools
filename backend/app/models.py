@@ -152,6 +152,20 @@ class CharacterVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class BookMaterialVersion(Base):
+    __tablename__ = "book_material_versions"
+    __table_args__ = (UniqueConstraint("book_id", "material_key", "version_number", name="uq_book_material_version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    material_key: Mapped[str] = mapped_column(String(80))
+    version_number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(120))
+    content: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class CurrentStateSettings(Base):
     __tablename__ = "current_state_settings"
     book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)

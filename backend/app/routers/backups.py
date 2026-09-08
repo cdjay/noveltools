@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Book, Chapter, ChapterVersion, OutlineTextVersion, CurrentStateVersion, CurrentStateSettings
+from ..models import Book, Chapter, ChapterVersion, OutlineTextVersion, CurrentStateVersion, CurrentStateSettings, BookMaterialVersion
 from ..schemas import BookCreate, BookOut
 from ..services import count_words, read_content, serialize_book
 from .core import require_book
@@ -50,9 +50,14 @@ class SavedStateVersion(SavedVersion):
     source_manifest: dict = Field(default_factory=dict)
 
 
+class SavedMaterialVersion(SavedVersion):
+    material_key: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,79}$")
+    title: str = Field(min_length=1, max_length=120)
+
+
 class BookArchive(BaseModel):
     format: Literal["noveltools-book"] = "noveltools-book"
-    schema_version: Literal[1, 2] = 2
+    schema_version: Literal[1, 2, 3] = 3
     book: BookCreate
     created_at: datetime
     updated_at: datetime
@@ -61,6 +66,7 @@ class BookArchive(BaseModel):
     outlines: list[SavedVersion]
     current_state_versions: list[SavedStateVersion] = Field(default_factory=list)
     current_state_prompt: str | None = None
+    material_versions: list[SavedMaterialVersion] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid_references(self):
@@ -71,6 +77,10 @@ class BookArchive(BaseModel):
         unique([c.chapter_number for c in self.chapters])
         unique([o.version_number for o in self.outlines])
         unique([s.version_number for s in self.current_state_versions])
+        unique([(m.material_key, m.version_number) for m in self.material_versions])
+        for material in self.material_versions:
+            if not material.title.strip() or (material.material_key == 'writing-rules' and material.title != '写作规则'):
+                raise ValueError("资料标题无效")
         if self.current_chapter_id is not None and self.current_chapter_id not in {c.id for c in self.chapters}:
             raise ValueError("当前章节引用无效")
         for chapter in self.chapters:
@@ -102,13 +112,16 @@ def export_backup(book_id: int, db: Session = Depends(get_db)):
     outlines = db.scalars(select(OutlineTextVersion).where(OutlineTextVersion.book_id == book_id).order_by(OutlineTextVersion.version_number)).all()
     states = db.scalars(select(CurrentStateVersion).where(CurrentStateVersion.book_id == book_id).order_by(CurrentStateVersion.version_number)).all()
     state_settings = db.get(CurrentStateSettings, book_id)
+    materials = db.scalars(select(BookMaterialVersion).where(BookMaterialVersion.book_id == book_id)
+                          .order_by(BookMaterialVersion.material_key, BookMaterialVersion.version_number)).all()
     try:
         archive = BookArchive(book=BookCreate.model_validate({key: getattr(book, key) for key in BookCreate.model_fields}),
             created_at=book.created_at, updated_at=book.updated_at,
             current_chapter_id=book.current_chapter_id if book.current_chapter_id in {c.id for c in chapters} else None,
             chapters=saved, outlines=[version_out(o, o.content) for o in outlines],
             current_state_versions=[version_out(s, s.content) | {"model": s.model, "prompt": s.prompt, "source_manifest": s.source_manifest} for s in states],
-            current_state_prompt=state_settings.prompt if state_settings else None)
+            current_state_prompt=state_settings.prompt if state_settings else None,
+            material_versions=[version_out(m, m.content) | {"material_key": m.material_key, "title": m.title} for m in materials])
     except ValidationError:
         raise HTTPException(409, "书籍的版本引用不完整，请先修复数据后备份。")
     return Response(archive.model_dump_json(indent=2), media_type="application/json",
@@ -130,7 +143,8 @@ async def preview_backup(file: UploadFile = File(...)):
     archive = await parse_archive(file)
     return {"title": archive.book.title, "chapters": len(archive.chapters),
             "versions": sum(len(c.versions) for c in archive.chapters), "outlines": len(archive.outlines),
-            "current_states": len(archive.current_state_versions)}
+            "current_states": len(archive.current_state_versions),
+            "materials": len({m.material_key for m in archive.material_versions}), "material_versions": len(archive.material_versions)}
 
 
 @router.post("/backups/restore", response_model=BookOut)
@@ -169,6 +183,8 @@ async def restore_backup(file: UploadFile = File(...), db: Session = Depends(get
         db.add(CurrentStateVersion(book_id=book.id, source_manifest=manifest, **fields))
     if archive.current_state_prompt is not None:
         db.add(CurrentStateSettings(book_id=book.id, prompt=archive.current_state_prompt))
+    for material in archive.material_versions:
+        db.add(BookMaterialVersion(book_id=book.id, **material.model_dump(exclude={'id'})))
     db.commit()
     return serialize_book(book, db)
 
