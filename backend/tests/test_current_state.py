@@ -117,3 +117,21 @@ def test_backup_roundtrip_and_legacy_archive():
     restored = client.post('/api/backups/restore', files={'file': ('old.json', json.dumps(old).encode())})
     assert restored.status_code == 200
     assert client.get(f"/api/books/{restored.json()['id']}/current-state").json()['version'] is None
+
+
+def test_empty_truncated_and_summary_race_do_not_save(monkeypatch):
+    book, chapters, url = setup_book(1)
+    original = httpx.AsyncClient
+    for output in ({'choices': [{'message': {'content': ''}}]},
+                   {'choices': [{'message': {'content': '未完稿'}, 'finish_reason': 'length'}]}):
+        with monkeypatch.context() as patch:
+            patch.setattr(current_state.httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(lambda r: httpx.Response(200, json=output))))
+            assert client.post(url + '/generate', json={'base_version_id': None}).status_code == 502
+            assert client.get(url).json()['version'] is None
+    async def race(provider, prompt, context):
+        with SessionLocal.begin() as db:
+            db.get(Chapter, chapters[0]['id']).summary = '生成期间更新梗概'
+        return '旧梗概对应的速查'
+    monkeypatch.setattr(current_state, 'call_model', race)
+    assert client.post(url + '/generate', json={'base_version_id': None}).status_code == 409
+    assert client.get(url).json()['version'] is None

@@ -9,6 +9,7 @@ import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, Loading,
 import { ReaderPage } from './pages/ReaderPage'
 import { OutlinePage } from './pages/OutlinePage'
 import { SettingsPage } from './pages/SettingsPage'
+import { CurrentStatePage } from './pages/CurrentStatePage'
 import { FormatSwitch, TextContent, TextEditor } from './lib/TextContent'
 import { RestoreBackup } from './lib/RestoreBackup'
 
@@ -137,7 +138,7 @@ function LibraryPage() {
 
 type NavItem = { key: string; label: string; icon: typeof PenLine }
 const navGroups: { title: string; items: NavItem[] }[] = [
-  { title: '写作', items: [{ key: 'reader', label: '正文', icon: PenLine }, { key: 'outline', label: '大纲', icon: ListTree }] },
+  { title: '写作', items: [{ key: 'reader', label: '正文', icon: PenLine }, { key: 'outline', label: '大纲', icon: ListTree }, { key: 'current-state', label: '当前状态速查', icon: BookOpenText }] },
   { title: '管理', items: [{ key: 'settings', label: 'LLM 配置', icon: Settings }] },
 ]
 
@@ -220,6 +221,7 @@ function WorkspaceLayout() {
         <Routes>
           <Route path="reader" element={<ReaderPage key={bookId} />} />
           <Route path="outline" element={<OutlinePage key={bookId} />} />
+          <Route path="current-state" element={<CurrentStatePage key={bookId} />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to={`/books/${bookId}/reader`} replace />} />
         </Routes>

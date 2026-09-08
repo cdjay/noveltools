@@ -28,7 +28,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"], expose_headers=["X-State-Version", "X-State-Stale"])
 app.include_router(router)
 app.include_router(outline_router)
 app.include_router(summary_router)

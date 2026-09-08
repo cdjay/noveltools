@@ -61,6 +61,16 @@ class StateVersionOut(BaseModel):
     created_at: str
 
 
+class CurrentStateOut(BaseModel):
+    schema_version: int = 1
+    book_id: int
+    format: str = "markdown"
+    version: StateVersionOut | None
+    is_stale: bool
+    generating: bool
+    source_error: str | None = None
+
+
 def latest(db, book_id):
     return db.scalar(select(CurrentStateVersion).where(CurrentStateVersion.book_id == book_id)
                      .order_by(CurrentStateVersion.version_number.desc()).limit(1))
@@ -155,21 +165,34 @@ def save_settings(book_id: int, payload: SettingsSave, db: Session = Depends(get
     return get_settings(book_id, db)
 
 
-@router.get("")
+@router.get("", response_model=CurrentStateOut)
 def get_current(book_id: int, db: Session = Depends(get_db)):
     require_book(db, book_id)
     version = latest(db, book_id)
-    manifest, _ = snapshot(db, book_id)
+    source_error = None
+    try:
+        manifest, _ = snapshot(db, book_id)
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        manifest, source_error = None, str(exc.detail)
     return {"schema_version": 1, "book_id": book_id, "format": "markdown",
             "version": version_out(version) if version else None,
             "is_stale": bool(version and version.source_manifest != manifest),
-            "generating": db.get(CurrentStateLease, book_id) is not None}
+            "generating": db.get(CurrentStateLease, book_id) is not None, "source_error": source_error}
 
 
 @router.get("/context")
 def get_context(book_id: int, db: Session = Depends(get_db)):
-    manifest, context = snapshot(db, book_id)
     provider = summary_provider(db)
+    try:
+        manifest, context = snapshot(db, book_id)
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        return {"body_chapters": [], "chapter_count": 0, "summary_count": 0,
+                "missing_summary_chapter_ids": [], "stale_summary_chapter_ids": [], "input_characters": 0,
+                "model": provider.model if provider else None, "source_error": str(exc.detail)}
     return {"body_chapters": [{k: value for k, value in c.items() if k != "content"} for c in context["recent_chapters"]],
             "chapter_count": len(manifest["chapters"]), "summary_count": len(context["all_summaries"]),
             "missing_summary_chapter_ids": manifest["missing_summary_chapter_ids"],

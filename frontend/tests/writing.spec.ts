@@ -2,13 +2,13 @@ import { test, expect } from '@playwright/test'
 
 const api = 'http://127.0.0.1:19518/api'
 
-test('只保留三个工作入口，大纲全文可保存、查看历史与恢复', async ({ page, request }, testInfo) => {
+test('工作入口包含独立速查页，大纲全文可保存、查看历史与恢复', async ({ page, request }, testInfo) => {
   const book = await (await request.post(`${api}/books`, { data: { title: '全文大纲验收' } })).json()
   try {
     await page.goto(`/books/${book.id}/outline`)
     const navigation = page.locator('aside[aria-label="工作区导航"] nav')
-    await expect(navigation.getByRole('button')).toHaveCount(3)
-    for (const name of ['正文', '大纲', 'LLM 配置']) await expect(navigation.getByRole('button', { name, exact: true })).toBeVisible()
+    await expect(navigation.getByRole('button')).toHaveCount(4)
+    for (const name of ['正文', '大纲', '当前状态速查', 'LLM 配置']) await expect(navigation.getByRole('button', { name, exact: true })).toBeVisible()
     const editor = page.getByRole('textbox', { name: '大纲全文', exact: true })
     await editor.fill('第一稿：风雪中启程。\n\n自由编写，不分段块。')
     await page.getByRole('button', { name: '保存大纲', exact: true }).click()
