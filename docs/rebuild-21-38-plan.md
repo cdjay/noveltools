@@ -37,7 +37,7 @@
 
 `data/reports/book2_rebuild_21_38_20260908/before_rebuild.db`为恢复大纲前完整数据库；`before_chapter_rebuild.book.json`为38章及149正文历史版本的可导入备份（含已恢复v34大纲）。`baseline.json`记录原正文头、大纲v33与速查v79，`restored_outline_v12.md`为恢复内容，`progress.json`为阶段回执。
 
-当前阶段：新21—28均经Gemini生成和逐段核对，八章通过稿已齐备，跨章数量及事实边界复核完成，准备切换正文并重新生成速查。原1—20章保留。旧21—38将在独立存档册保留，退出当前续写来源。
+当前阶段：已完成。新21—28均经Gemini生成和逐段核对，已切换正文并重新生成、核正速查至v81；来源全部最新。原1—20章保留，旧38章完整存于book_id=3的独立存档册。结果及核查记录见`docs/rebuild-21-38-result.md`，停在新28章。
 
 ### 新21审阅记录
 
