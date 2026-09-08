@@ -48,7 +48,7 @@ export function LLMRouting({ active, onDirty }: { active: boolean; onDirty: (dir
         <div><div className="font-medium">{row.label}</div><MetaText className="mt-1">{row.description}</MetaText></div>
         <div>
           <Select aria-label={`${row.label}使用的模型`} className="w-full" value={draft[row.module] ?? selection(row)} disabled={!!busy} onChange={event => setDraft(previous => ({ ...previous, [row.module]: event.target.value }))}>
-            <option value="">跟随默认模型</option>
+            <option value="">{row.module === 'chapter_writing' ? '默认 Gemini 配置' : '跟随默认模型'}</option>
             {!row.use_default && row.provider_id === null && <option value="missing" disabled>指定配置已删除，请重新选择</option>}
             {row.provider_id !== null && !providers.some(p => p.id === row.provider_id) && <option value={String(row.provider_id)} disabled>指定配置不可用</option>}
             {providers.map(p => <option key={p.id} value={String(p.id)} disabled={!p.has_api_key}>{p.provider_name} · {p.model}{p.enabled ? '（默认）' : ''}{!p.has_api_key ? '（未设置密钥）' : ''}</option>)}
@@ -61,7 +61,7 @@ export function LLMRouting({ active, onDirty }: { active: boolean; onDirty: (dir
       </div>)}
       <div className="rounded-md bg-paper-sunken p-4 text-meta leading-6 text-ink-soft">
         <div>连接测试、读取可用模型：直接使用“模型列表”中正在编辑且已保存的配置，无需分流。</div>
-        <div>正文自动续写尚未接入，开发后会加入此列表。正文、大纲和资料保存不调用模型。</div>
+        <div>正文生成用于正文页的持续生成工作流，默认选择 Gemini；正文、大纲和资料的手动保存不调用模型。</div>
         <div>指定配置被删除或清除密钥后，该模块会提示重新配置，不会自动改用其他模型。切换分页保留未保存修改。</div>
       </div>
     </div>}

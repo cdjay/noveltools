@@ -176,7 +176,7 @@ export function SettingsPage() {
   const [routingDirty, setRoutingDirty] = useState(false)
   useUnsavedChanges(modelDirty || routingDirty)
   return <div className="p-6">
-    <PageHeader title="LLM 配置" description="管理模型连接，并为章节梗概、批量梗概和当前状态速查分别指定模型。" />
+    <PageHeader title="LLM 配置" description="管理模型连接，并为正文生成、章节梗概、批量梗概和当前状态速查分别指定模型。" />
     <Tabs className="mt-5" value={tab} onChange={setTab} items={[['models', '模型列表'], ['routing', '模块分流']]} />
     <div className="mt-5" hidden={tab !== 'models'}><ModelSettings onDirty={setModelDirty} /></div>
     <div className="mt-5" hidden={tab !== 'routing'}><LLMRouting active={tab === 'routing'} onDirty={setRoutingDirty} /></div>

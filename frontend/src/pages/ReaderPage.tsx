@@ -9,6 +9,7 @@ import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, MetaText
 import { ImportChapters } from '../lib/ImportChapters'
 import { ReorderChapters } from '../lib/ReorderChapters'
 import { SummaryTaskPanel } from '../lib/SummaryTaskPanel'
+import { WritingTaskControl } from '../lib/WritingTaskControl'
 import { CopyButton } from '../lib/CopyButton'
 import { FormatSwitch, TextContent, TextEditor } from '../lib/TextContent'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
@@ -34,6 +35,8 @@ export function ReaderPage() {
   const [creating, setCreating] = useState(false)
   const [summarizing, setSummarizing] = useState(false)
   const [batchSummarizing, setBatchSummarizing] = useState(false)
+  const [writingBusy, setWritingBusy] = useState(false)
+  const writingRefreshSequence = useRef(0)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [focusMode, setFocusMode] = useState(false)
@@ -273,7 +276,7 @@ export function ReaderPage() {
         })}
       </div>
       <div className="border-t border-line-soft p-2.5">
-        {currentBook && <SummaryTaskPanel bookId={currentBook.id} disabled={dirty || saving || summarizing} onBusy={setBatchSummarizing} onProgress={() => void refreshSummaries()} />}
+        {currentBook && <SummaryTaskPanel bookId={currentBook.id} disabled={dirty || saving || summarizing || writingBusy} onBusy={setBatchSummarizing} onProgress={() => void refreshSummaries()} />}
         {currentBook && <div className="mt-1 flex flex-col"><ImportChapters bookId={currentBook.id} disabled={dirty || saving || loadingChapter} onImported={imported} /><ReorderChapters bookId={currentBook.id} chapters={chapters} disabled={dirty || saving || loadingChapter} onSaved={next => { setChapters(next); if (currentChapter) { const fresh = next.find(item => item.id === currentChapter.id); if (fresh) setCurrentChapter({ ...currentChapter, chapter_number: fresh.chapter_number }) } }} /></div>}
       </div>
     </aside>
@@ -294,8 +297,19 @@ export function ReaderPage() {
         <Button size="sm" variant="ghost" title={focusMode ? '退出专注模式' : '专注模式'} onClick={() => setFocusMode(!focusMode)}>{focusMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}{focusMode ? '退出专注' : '专注'}</Button>
         <div className="mx-1 h-5 w-px bg-line" />
         {dirty && <Badge tone="warn">有未保存修改</Badge>}
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          <Button size="sm" variant="secondary" disabled={!currentChapter || dirty || saving || summarizing || batchSummarizing} title={dirty ? '请先保存正文修改，再生成梗概' : '使用已保存的本章正文生成梗概'} onClick={() => void generateSummary()}>{summarizing ? '梗概生成中…' : '生成本章梗概'}</Button>
+        <div className="ml-auto flex max-w-full flex-wrap items-center gap-1.5">
+          {currentBook && <WritingTaskControl key={currentBook.id} bookId={currentBook.id} disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing}
+            onBusy={setWritingBusy} onProgress={() => {
+              const bookId = currentBook.id
+              const sequence = ++writingRefreshSequence.current
+              void api<Chapter[]>(`/books/${bookId}/chapters?include_content=false`).then(next => {
+                if (sequence === writingRefreshSequence.current && useAppStore.getState().currentBook?.id === bookId) setChapters(next)
+              }).catch(() => undefined)
+            }} onOpen={id => {
+              const chapter = useAppStore.getState().chapters.find(c => c.id === id)
+              if (chapter) requestChapter(chapter)
+            }} />}
+          <Button size="sm" variant="secondary" disabled={!currentChapter || dirty || saving || summarizing || batchSummarizing || writingBusy} title={dirty ? '请先保存正文修改，再生成梗概' : '使用已保存的本章正文生成梗概'} onClick={() => void generateSummary()}>{summarizing ? '梗概生成中…' : '生成本章梗概'}</Button>
           <Button size="sm" variant="secondary" disabled={saving || loadingChapter || !currentChapter} onClick={() => void save()}><Save size={14} />{saving ? '保存中…' : '保存新版本'}</Button>
           <Button size="sm" variant="ghost" title="梗概与历史" aria-label="切换梗概与历史" onClick={() => { if (focusMode) setFocusMode(false); else prefs.toggleReaderContext() }}><PanelRight size={15} /></Button>
         </div>
