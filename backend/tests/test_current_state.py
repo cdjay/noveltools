@@ -71,8 +71,13 @@ def setup_book(count=7):
 
 def test_exact_llm_context_prompt_and_read_interfaces(monkeypatch):
     book, chapters, url = setup_book()
+    outline_url = f"/api/books/{book['id']}/outline/versions"
+    first = client.post(outline_url, json={'content': '旧大纲', 'base_version_id': None}).json()
+    outline_text = '# 世界规则与未来规划\n' + '未来计划并非已发生事实。' * 5000
+    client.post(outline_url, json={'content': outline_text, 'base_version_id': first['id']})
     other = client.post('/api/books', json={'title': '另一本'}).json()
     client.post(f"/api/books/{other['id']}/chapters", json={'content': '不能泄入本书'})
+    client.post(f"/api/books/{other['id']}/outline/versions", json={'content': '别书大纲不可泄入', 'base_version_id': None})
     prompt = '使用 Markdown 整理我的状态资料'
     assert client.put(url + '/settings', json={'prompt': prompt, 'base_revision': 0}).status_code == 200
     assert client.get(f"/api/books/{other['id']}/current-state/settings").json()['revision'] == 0
@@ -86,8 +91,15 @@ def test_exact_llm_context_prompt_and_read_interfaces(monkeypatch):
     assert generated.status_code == 200, generated.text
     state = generated.json()
     assert captured[0]['model'] == 'state-model'
-    assert captured[0]['messages'][0]['content'] == prompt
+    assert captured[0]['messages'][0]['content'] == prompt + '\n\n' + current_state.OUTLINE_GUIDANCE
+    assert state['prompt'] == captured[0]['messages'][0]['content']
+    assert client.get(url + '/settings').json()['prompt'] == prompt
     payload = json.loads(captured[0]['messages'][1]['content'])
+    assert payload['outline'] == {'version_number': 2, 'content': outline_text}
+    assert state['source_manifest']['outline'] == {'version_number': 2, 'content_sha256': content_sha256(outline_text)}
+    context = client.get(url + '/context').json()
+    assert context['outline'] == {'version_number': 2, 'characters': len(outline_text), 'is_empty': False}
+    assert context['input_characters'] == len(json.dumps(payload, ensure_ascii=False))
     assert [c['content'] for c in payload['recent_chapters']] == [f'正文{i}' for i in range(3, 8)]
     assert [c['summary'] for c in payload['all_summaries']] == [f'梗概{i}' for i in range(1, 8)]
     assert client.get(url).json()['is_stale'] is False
@@ -133,6 +145,7 @@ def test_missing_summaries_and_duplicate_generation(monkeypatch):
     assert client.get(url + '/context').json()['missing_summary_chapter_ids'] == [chapters[0]['id']]
     async def nested(provider, prompt, context):
         assert len(context['recent_chapters']) == 1 and context['all_summaries'] == []
+        assert context['outline'] is None
         assert client.post(url + '/generate', json={'base_version_id': None}).status_code == 409
         return '## 当前进度\n资料待补充'
     monkeypatch.setattr(current_state, 'call_model', nested)
@@ -141,6 +154,7 @@ def test_missing_summaries_and_duplicate_generation(monkeypatch):
 
 def test_backup_roundtrip_and_legacy_archive():
     book, chapters, url = setup_book(2)
+    client.post(f"/api/books/{book['id']}/outline/versions", json={'content': '备份大纲', 'base_version_id': None})
     client.put(url + '/settings', json={'prompt': '本书专用提示词', 'base_revision': 0})
     client.post(url + '/versions', json={'content': '## 当前进度\n待续', 'base_version_id': None})
     backup = client.get(f"/api/books/{book['id']}/backup")
@@ -150,6 +164,7 @@ def test_backup_roundtrip_and_legacy_archive():
     state = client.get(copied_url).json()
     assert state['version']['content'] == '## 当前进度\n待续'
     assert state['is_stale'] is False
+    assert state['version']['source_manifest']['outline'] == {'version_number': 1, 'content_sha256': content_sha256('备份大纲')}
     assert state['version']['source_manifest']['body_chapter_ids'] != [c['id'] for c in chapters]
     assert client.get(copied_url + '/settings').json()['prompt'] == '本书专用提示词'
     old = backup.json()
@@ -176,3 +191,28 @@ def test_empty_truncated_and_summary_race_do_not_save(monkeypatch):
     monkeypatch.setattr(current_state, 'call_model', race)
     assert client.post(url + '/generate', json={'base_version_id': None}).status_code == 409
     assert client.get(url).json()['version'] is None
+
+
+def test_outline_changes_invalidate_state_and_reject_inflight_result(monkeypatch):
+    book, _, url = setup_book(1)
+    outline_url = f"/api/books/{book['id']}/outline/versions"
+    saved = client.post(url + '/versions', json={'content': '原速查', 'base_version_id': None}).json()
+    assert not client.get(url).json()['is_stale']
+    outline = client.post(outline_url, json={'content': '未来计划', 'base_version_id': None}).json()
+    assert client.get(url).json()['is_stale']
+    async def race(provider, prompt, context):
+        assert context['outline']['content'] == '未来计划'
+        assert client.post(outline_url, json={'content': '', 'base_version_id': outline['id']}).status_code == 200
+        return '基于旧大纲的结果'
+    monkeypatch.setattr(current_state, 'call_model', race)
+    result = client.post(url + '/generate', json={'base_version_id': saved['id']})
+    assert result.status_code == 409 and '大纲' in result.json()['detail']
+    assert client.get(url).json()['version']['id'] == saved['id']
+    assert not client.get(url).json()['generating']
+    assert client.get(url + '/context').json()['outline'] == {'version_number': 2, 'characters': 0, 'is_empty': True}
+    async def blank(provider, prompt, context):
+        assert context['outline'] == {'version_number': 2, 'content': ''}
+        return '空大纲，按正文整理'
+    monkeypatch.setattr(current_state, 'call_model', blank)
+    assert client.post(url + '/generate', json={'base_version_id': saved['id']}).status_code == 200
+    assert not client.get(url).json()['is_stale']

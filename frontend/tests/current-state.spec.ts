@@ -9,6 +9,7 @@ test('速查限流显示可读原因并保留已有版本', async ({ page, reque
     await request.post(`${api}/books/${book.id}/chapters`, { data: { content: '测试正文' } })
     const saved = await (await request.post(base + '/versions', { data: { content: '已有状态内容', base_version_id: null } })).json()
     await page.goto(`/books/${book.id}/current-state`)
+    await expect(page.getByText('大纲：尚未保存', { exact: false })).toBeVisible()
     let calls = 0
     const message = '模型服务并发限流（HTTP 429）。请等待约 30 秒后重试。'
     await page.route(`**/books/${book.id}/current-state/generate`, route => {
@@ -31,9 +32,11 @@ test('独立速查页可生成、编辑提示词、保存历史并提供提取�
   for (let index = 1; index <= 6; index++) chapters.push(await (await request.post(`${api}/books/${book.id}/chapters`, { data: { title: `第${index}次相遇`, content: `正文内容${index}` } })).json())
   const base = `${api}/books/${book.id}/current-state`
   try {
+    await request.post(`${api}/books/${book.id}/outline/versions`, { data: { content: '大纲规划', base_version_id: null } })
     await page.setViewportSize({ width: 1440, height: 1000 })
     await page.goto(`/books/${book.id}/current-state`)
     await expect(page.getByRole('heading', { name: '当前状态速查', exact: true })).toBeVisible()
+    await expect(page.getByText('大纲：已纳入 v1 全文 · 4 字符', { exact: false })).toBeVisible()
     await expect(page.getByText('正文范围：', { exact: false })).toContainText('第 2 章、第 3 章、第 4 章、第 5 章、第 6 章')
     await page.getByRole('button', { name: '页面设置' }).click()
     const prompt = page.getByRole('textbox', { name: '当前状态速查提示词', exact: true })

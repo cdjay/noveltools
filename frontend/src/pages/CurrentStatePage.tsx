@@ -11,7 +11,7 @@ import { Badge, Button, ConfirmModal, Empty, InlineError, Loading, MetaText, Mod
 type StateVersion = { id: number; book_id: number; version_number: number; content: string; source: string; note: string; model: string; prompt: string; created_at: string; source_manifest: { body_chapter_ids?: number[]; chapters?: { chapter_number: number; title: string }[] } }
 type CurrentState = { book_id: number; version: StateVersion | null; is_stale: boolean; generating: boolean }
 type StateSettings = { prompt: string; revision: number; default_prompt: string }
-type SourceContext = { body_chapters: { chapter_id: number; chapter_number: number; title: string }[]; chapter_count: number; summary_count: number; missing_summary_chapter_ids: number[]; stale_summary_chapter_ids: number[]; input_characters: number; model: string | null; max_output_tokens?: number | null; timeout_seconds?: number | null; source_error?: string }
+type SourceContext = { outline?: { version_number: number; characters: number; is_empty: boolean } | null; body_chapters: { chapter_id: number; chapter_number: number; title: string }[]; chapter_count: number; summary_count: number; missing_summary_chapter_ids: number[]; stale_summary_chapter_ids: number[]; input_characters: number; model: string | null; max_output_tokens?: number | null; timeout_seconds?: number | null; source_error?: string }
 
 export function CurrentStatePage() {
   const bookId = useAppStore(state => state.currentBook?.id)
@@ -120,7 +120,7 @@ export function CurrentStatePage() {
   const running = generating || !!current?.generating
   if (loading) return <Loading text="正在读取当前状态速查…" />
   return <div className="mx-auto max-w-7xl p-5 lg:p-7">
-    <PageHeader title="当前状态速查" description="按本书最后 5 章正文与全部已有章节梗概整理，生成后自动保存历史，可继续手动编辑。" actions={<>
+    <PageHeader title="当前状态速查" description="按本书最新已保存大纲全文、最后 5 章正文与全部已有章节梗概整理，生成后自动保存历史，可继续手动编辑。" actions={<>
       <Button variant="ghost" disabled={busy || running} onClick={() => setSettingsOpen(true)}><Settings2 size={14} />页面设置</Button>
       <Button variant="secondary" disabled={!current || busy || running || !dirty} onClick={() => void save()}><Save size={14} />保存修改</Button>
       <Button variant="primary" disabled={!current || busy || running || dirty || promptDirty || !context?.body_chapters.length} title={dirty ? '请先保存或放弃速查修改' : '使用已保存提示词与当前启用模型生成'} onClick={() => void generate()}><Sparkles size={14} />{running ? '正在生成…' : '生成当前状态速查'}</Button>
@@ -128,6 +128,7 @@ export function CurrentStatePage() {
     {error && <div className="mt-4"><InlineError message={error} /></div>}
     <div className="my-4 rounded-md border border-line-soft bg-paper-raised px-4 py-3 text-meta leading-6 text-ink-soft">
       <div>正文范围：{context?.body_chapters.map(c => `第 ${c.chapter_number} 章`).join('、') || '暂无章节'} · 梗概 {context?.summary_count || 0} / {context?.chapter_count || 0} 章 · 输入约 {context?.input_characters.toLocaleString() || 0} 字符</div>
+      <div>大纲：{context?.outline ? `已纳入 v${context.outline.version_number} 全文 · ${context.outline.characters.toLocaleString()} 字符${context.outline.is_empty ? "（内容为空）" : ""}` : "尚未保存，将按现有正文与梗概整理"}。大纲中的未来剧情仅作规划参考。</div>
       <div>模型：{context?.model || '尚未启用，请到 LLM 配置设置'}。按当前章节顺序选取；输入完整发送，不自动截断。</div>
       {!!context?.max_output_tokens && <div>最大输出：{context.max_output_tokens.toLocaleString()} Tokens（在 LLM 配置修改）。这是生成结果的上限，不是输入容量；上面的输入字符数也不等于 Token 数。</div>}
       {!!context?.timeout_seconds && <div>等待模型响应：{Number((context.timeout_seconds / 60).toFixed(1))} 分钟，可在 LLM 配置延长；修改后用于下一次请求。</div>}
@@ -168,7 +169,7 @@ export function CurrentStatePage() {
     <Modal open={settingsOpen} onClose={closeSettings} title="当前状态速查 · 页面设置" description="提示词仅影响本书，保存后用于下一次生成。模型和超时使用全局 LLM 配置。" width="max-w-4xl" footer={<><Button variant="ghost" disabled={busy} onClick={() => { setPrompt(settings?.default_prompt || ''); setSettingsError('') }}>填入默认提示词</Button><Button variant="primary" disabled={busy || !prompt.trim() || !promptDirty} onClick={() => void saveSettings()}>保存提示词</Button></>}>
       {settingsError && <InlineError message={settingsError} />}
       <Textarea aria-label="当前状态速查提示词" rows={18} value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} />
-      <MetaText className="mt-3">最后五章正文与全部已有梗概由系统另行发送，无需在提示词中粘贴。修改提示词不会改变固定的取材范围。</MetaText>
+      <MetaText className="mt-3">最新已保存大纲全文、最后五章正文与全部已有梗概由系统另行发送，无需在提示词中粘贴。修改提示词不会改变固定的取材范围；系统会附加大纲规划与已发生事实的区分说明。</MetaText>
     </Modal>
     <Modal open={!!preview} onClose={() => setPreview(null)} title={`速查历史 · v${preview?.version_number}`} width="max-w-4xl" footer={<Button variant="ghost" onClick={() => setPreview(null)}>关闭</Button>}>
       <div className="mb-4"><FormatSwitch /></div>
