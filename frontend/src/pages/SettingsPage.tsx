@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { PlugZap, Plus } from 'lucide-react'
+import { Copy, PlugZap, Plus } from 'lucide-react'
 import { api } from '../api/client'
 import type { Provider } from '../types'
 import { LLMRouting } from './LLMRouting'
@@ -19,8 +19,8 @@ type ProviderForm = {
 }
 
 const defaultForm: ProviderForm = {
-  provider_name: 'OpenAI Compatible', provider_type: 'openai_compatible',
-  base_url: 'https://api.openai.com/v1', api_key: '', model: 'gpt-4o-mini',
+  provider_name: '', provider_type: 'openai_compatible',
+  base_url: '', api_key: '', model: '',
   temperature: 0.2, max_tokens: 3000, timeout: 1800, enabled: true,
 }
 
@@ -30,6 +30,8 @@ const formFromProvider = (item: Provider): ProviderForm => ({
   temperature: item.temperature, max_tokens: item.max_tokens,
   timeout: item.timeout, enabled: item.enabled,
 })
+
+const initialProvider = (items: Provider[]) => items.find(item => item.enabled) || items[0] || null
 
 function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   const [items, setItems] = useState<Provider[]>([])
@@ -53,17 +55,22 @@ function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   }
   const remove = async (keyOnly: boolean) => {
     if (!selected || !window.confirm(keyOnly ? '清除已保存的 API Key 并停用此配置？' : `删除「${selected.provider_name}」配置？`)) return
+    setSaving(true); setError('')
     try {
       await api(`/llm/providers/${selected.id}${keyOnly ? '/key' : ''}`, { method: 'DELETE' })
       const next = await api<Provider[]>('/llm/providers')
-      setItems(next); edit(keyOnly ? next.find(item => item.id === selected.id) || null : null)
+      setItems(next); edit(keyOnly ? next.find(item => item.id === selected.id) || initialProvider(next) : initialProvider(next))
       toast(keyOnly ? '密钥已清除，配置已停用' : '配置已删除')
     } catch (exc) { setError(String(exc)) }
+    finally { setSaving(false) }
   }
 
   const load = async () => {
     setLoading(true); setError('')
-    try { setItems(await api<Provider[]>('/llm/providers')) }
+    try {
+      const next = await api<Provider[]>('/llm/providers')
+      setItems(next); edit(initialProvider(next))
+    }
     catch (exc) { setError(exc instanceof Error ? exc.message : '读取模型配置失败') }
     finally { setLoading(false) }
   }
@@ -73,7 +80,25 @@ function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
     setSelected(item); setForm(item ? formFromProvider(item) : { ...defaultForm })
     setMessage(''); setError(''); setModels([])
   }
+  const choose = (item: Provider | null) => {
+    if (saving || testing || fetchingModels) return
+    if (dirty && !window.confirm('放弃未保存的配置修改？')) return
+    edit(item)
+  }
+  const copy = async () => {
+    if (!selected || dirty || saving || testing || fetchingModels) return
+    setSaving(true); setError('')
+    try {
+      const item = await api<Provider>(`/llm/providers/${selected.id}/copy`, { method: 'POST' })
+      setItems(previous => [item, ...previous]); edit(item)
+      toast('副本已创建，地址和密钥已沿用；修改模型名后保存即可。')
+    } catch (exc) { setError(String(exc)) }
+    finally { setSaving(false) }
+  }
   const save = async () => {
+    if (!form.provider_name.trim() || !form.base_url.trim() || !form.model.trim()) {
+      setError('请填写名称、Base URL 和模型名。'); return
+    }
     setError(''); setSaving(true)
     try {
       const item = selected
@@ -99,9 +124,9 @@ function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
     {message && <InlineNotice tone="accent" message={message} />}
     {error && <InlineError message={error} />}
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <Panel title={`模型配置 · ${items.length}`} className="self-start" action={<Button size="sm" variant="subtle" onClick={() => edit(null)}><Plus size={13} />新建</Button>}>
+      <Panel title={`模型配置 · ${items.length}`} className="self-start" action={<Button size="sm" variant="subtle" disabled={saving || testing || fetchingModels} onClick={() => choose(null)}><Plus size={13} />新建</Button>}>
         {items.length === 0 ? <Empty compact title="暂无配置" text="添加并保存 OpenAI Compatible 接口配置。" /> : <div className="space-y-1.5">
-          {items.map(item => <button key={item.id} onClick={() => edit(item)} className={`w-full rounded-md border px-3 py-2.5 text-left transition-colors duration-fast ${selected?.id === item.id ? 'border-accent-300 bg-accent-50/60' : 'border-line-soft hover:bg-paper-sunken'}`}>
+          {items.map(item => <button key={item.id} disabled={saving || testing || fetchingModels} onClick={() => choose(item)} className={`w-full rounded-md border px-3 py-2.5 text-left transition-colors duration-fast ${selected?.id === item.id ? 'border-accent-300 bg-accent-50/60' : 'border-line-soft hover:bg-paper-sunken'}`}>
             <div className="flex items-center justify-between gap-2">
               <span className="truncate font-medium text-ink">{item.provider_name}</span>
               <Badge tone={item.enabled ? 'ok' : 'neutral'}>{item.enabled ? '默认' : '可分流'}</Badge>
@@ -111,7 +136,7 @@ function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
         </div>}
       </Panel>
       <Panel title={selected ? `编辑：${selected.provider_name}` : '新建配置'} description="支持 OpenAI Compatible 接口；保存配置不会自动调用模型。">
-        <div className="max-w-2xl space-y-4">
+        <fieldset disabled={saving || testing || fetchingModels} className="min-w-0 max-w-2xl space-y-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field label="名称"><Input value={form.provider_name} onChange={event => setForm({ ...form, provider_name: event.target.value })} /></Field>
             <Field label="模型名" hint="按服务模型列表填写完整 ID，注意大小写。"><Input list="provider-model-ids" value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></Field>
@@ -135,10 +160,11 @@ function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
           {selected && !selected.enabled && <MetaText>此配置不是默认模型，可在“模块分流”中单独指定。连接测试不会改变默认或分流选择。</MetaText>}
           <div className="flex flex-wrap gap-2 border-t border-line-soft pt-4">
             <Button variant="primary" disabled={saving} onClick={() => void save()}>{saving ? '保存中…' : '保存配置'}</Button>
+            {selected && <Button variant="secondary" disabled={dirty || saving} title={dirty ? '请先保存修改，再复制已保存配置' : '创建独立副本，沿用地址、密钥和模型参数'} onClick={() => void copy()}><Copy size={14} />复制配置</Button>}
             <Button variant="secondary" disabled={!selected || testing || dirty || saving} onClick={() => void test()}><PlugZap size={14} />{testing ? '测试中…' : '测试连接'}</Button>
             {selected && <><Button variant="ghost" disabled={saving || !selected.has_api_key} onClick={() => void remove(true)}>清除密钥</Button><Button variant="danger" disabled={saving} onClick={() => void remove(false)}>删除配置</Button></>}
           </div>
-        </div>
+        </fieldset>
       </Panel>
     </div>
   </div>

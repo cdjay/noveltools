@@ -14,6 +14,7 @@ from .routers.backups import router as backups_router
 from .routers.current_state import router as current_state_router
 from .routers.materials import router as materials_router
 from .routers.llm_routes import router as llm_routes_router
+from .routers.llm_provider_actions import router as llm_provider_actions_router
 
 Base.metadata.create_all(bind=engine)
 ensure_schema()
@@ -39,3 +40,4 @@ app.include_router(backups_router)
 app.include_router(current_state_router)
 app.include_router(materials_router)
 app.include_router(llm_routes_router)
+app.include_router(llm_provider_actions_router)
