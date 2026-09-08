@@ -10,6 +10,7 @@ import { ReaderPage } from './pages/ReaderPage'
 import { OutlinePage } from './pages/OutlinePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { CurrentStatePage } from './pages/CurrentStatePage'
+import { MaterialsPage } from './pages/MaterialsPage'
 import { FormatSwitch, TextContent, TextEditor } from './lib/TextContent'
 import { RestoreBackup } from './lib/RestoreBackup'
 
@@ -139,7 +140,7 @@ function LibraryPage() {
 type NavItem = { key: string; label: string; icon: typeof PenLine }
 const navGroups: { title: string; items: NavItem[] }[] = [
   { title: '写作', items: [{ key: 'reader', label: '正文', icon: PenLine }, { key: 'outline', label: '大纲', icon: ListTree }, { key: 'current-state', label: '当前状态速查', icon: BookOpenText }] },
-  { title: '管理', items: [{ key: 'settings', label: 'LLM 配置', icon: Settings }] },
+  { title: '管理', items: [{ key: 'materials', label: '书籍资料库', icon: LibraryBig }, { key: 'settings', label: 'LLM 配置', icon: Settings }] },
 ]
 
 function WorkspaceLayout() {
@@ -163,7 +164,7 @@ function WorkspaceLayout() {
     } catch (exc) { setError(String(exc)) }
   }
   useEffect(() => { void loadWorkspace(); return () => { loadId.current++ } }, [bookId])
-  const activeKey = navGroups.flatMap(group => group.items).find(item => location.pathname.endsWith(`/${item.key}`))?.key || 'reader'
+  const activeKey = navGroups.flatMap(group => group.items).find(item => location.pathname.split('/')[3] === item.key)?.key || 'reader'
   const activeLabel = navGroups.flatMap(group => group.items).find(item => item.key === activeKey)?.label || '正文'
 
   if (error) return <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-paper px-6">
@@ -222,6 +223,7 @@ function WorkspaceLayout() {
           <Route path="reader" element={<ReaderPage key={bookId} />} />
           <Route path="outline" element={<OutlinePage key={bookId} />} />
           <Route path="current-state" element={<CurrentStatePage key={bookId} />} />
+          <Route path="materials/:materialKey?" element={<MaterialsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to={`/books/${bookId}/reader`} replace />} />
         </Routes>

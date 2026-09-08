@@ -6,7 +6,7 @@ import { Button, InlineError, Modal, toast } from './ui'
 export function RestoreBackup({ onRestored }: { onRestored: (book: Book) => void }) {
   const input = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<{ title: string; chapters: number; versions: number; outlines: number; current_states?: number } | null>(null)
+  const [preview, setPreview] = useState<{ title: string; chapters: number; versions: number; outlines: number; current_states?: number; materials?: number; material_versions?: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const inspect = async (chosen: File) => {
@@ -29,7 +29,7 @@ export function RestoreBackup({ onRestored }: { onRestored: (book: Book) => void
     <Modal open={!!file} onClose={() => { if (!busy) setFile(null) }} title="恢复书籍备份" description="将创建独立的恢复副本，保留原书。备份包含已保存内容，不包含浏览器草稿与 API Key。"
       footer={<><Button variant="ghost" disabled={busy} onClick={() => setFile(null)}>取消</Button><Button variant="primary" disabled={busy || !preview} onClick={() => void restore()}>{busy ? '处理中…' : '恢复为新书籍'}</Button></>}>
       {error && <InlineError message={error} />}
-      {preview && <p className="text-body leading-7">《{preview.title}》<br />{preview.chapters} 章 · {preview.versions} 份正文版本 · {preview.outlines} 份大纲版本 · {preview.current_states || 0} 份状态速查版本</p>}
+      {preview && <p className="text-body leading-7">《{preview.title}》<br />{preview.chapters} 章 · {preview.versions} 份正文版本 · {preview.outlines} 份大纲版本 · {preview.current_states || 0} 份状态速查版本 · {preview.materials || 0} 份资料（{preview.material_versions || 0} 个历史版本）</p>}
     </Modal>
   </>
 }
