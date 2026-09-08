@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { createContext, useContext, useId, useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, Info, Loader2, X, XCircle } from 'lucide-react'
+import { CopyButton } from './CopyButton'
 
 /* ---------- 按钮 ---------- */
 
@@ -23,25 +24,38 @@ export function Button({ className = '', variant = 'secondary', size = 'md', ...
 /* ---------- 表单 ---------- */
 
 const fieldControl = 'w-full rounded-md border border-line bg-paper-raised px-3 py-2 text-body text-ink outline-none transition-colors duration-fast placeholder:text-ink-faint hover:border-line-strong focus:border-accent-500'
+const FieldContext = createContext<{ id: string; label: string } | null>(null)
 
 export function Input({ className = '', ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={`${fieldControl} ${className}`} {...props} />
+  const ref = useRef<HTMLInputElement>(null)
+  const field = useContext(FieldContext)
+  return <span className={`relative block max-w-full ${className.includes('w-64') ? 'w-64' : 'w-full'}`}>
+    <input ref={ref} id={field?.id} className={`${fieldControl} ${className} !pr-10`} {...props} />
+    <CopyButton getText={() => ref.current?.value || ''} label={props['aria-label'] || field?.label || props.placeholder || '文本'} className="absolute right-1 top-1/2 -translate-y-1/2" />
+  </span>
 }
 
 export function Textarea({ className = '', ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={`${fieldControl} leading-7 ${className}`} {...props} />
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const field = useContext(FieldContext)
+  return <span className="relative block w-full min-w-0">
+    <textarea ref={ref} id={field?.id} className={`${fieldControl} leading-7 ${className} !pr-10`} {...props} />
+    <CopyButton getText={() => ref.current?.value || ''} label={props['aria-label'] || field?.label || props.placeholder || '文本'} className="absolute right-1 top-2 bg-paper-raised/90" />
+  </span>
 }
 
 export function Select({ className = '', ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select className={`${fieldControl} cursor-pointer appearance-auto ${className}`} {...props} />
+  const field = useContext(FieldContext)
+  return <select id={field?.id} className={`${fieldControl} cursor-pointer appearance-auto ${className}`} {...props} />
 }
 
 export function Field({ label, hint, children, className = '' }: { label: string; hint?: string; children: ReactNode; className?: string }) {
-  return <label className={`block text-body text-ink-soft ${className}`}>
-    <span className="mb-1.5 block text-[13px] font-medium">{label}</span>
-    {children}
+  const id = useId()
+  return <div className={`block text-body text-ink-soft ${className}`}>
+    <label htmlFor={id} className="mb-1.5 block text-[13px] font-medium">{label}</label>
+    <FieldContext.Provider value={{ id, label }}>{children}</FieldContext.Provider>
     {hint && <span className="mt-1 block text-meta text-ink-faint">{hint}</span>}
-  </label>
+  </div>
 }
 
 /* ---------- 面板与版面 ---------- */
