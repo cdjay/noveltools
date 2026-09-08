@@ -19,7 +19,7 @@ type ProviderForm = {
 const defaultForm: ProviderForm = {
   provider_name: 'OpenAI Compatible', provider_type: 'openai_compatible',
   base_url: 'https://api.openai.com/v1', api_key: '', model: 'gpt-4o-mini',
-  temperature: 0.2, max_tokens: 3000, timeout: 60, enabled: true,
+  temperature: 0.2, max_tokens: 3000, timeout: 1800, enabled: true,
 }
 
 const formFromProvider = (item: Provider): ProviderForm => ({
@@ -122,7 +122,7 @@ function ModelSettings() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Field label="Temperature"><Input type="number" step="0.1" min="0" max="2" value={form.temperature} onChange={event => setForm({ ...form, temperature: Number(event.target.value) })} /></Field>
             <Field label="最大输出 Tokens"><Input type="number" min={100} value={form.max_tokens} onChange={event => setForm({ ...form, max_tokens: Number(event.target.value) })} /></Field>
-            <Field label="超时（秒）"><Input type="number" min={5} value={form.timeout} onChange={event => setForm({ ...form, timeout: Number(event.target.value) })} /></Field>
+            <Field label="生成等待（分钟）" hint={`保存值 ${form.timeout} 秒；默认 30 分钟，可继续调大。`}><Input type="number" min={0.1} step={0.1} value={Number((form.timeout / 60).toFixed(3))} onChange={event => setForm({ ...form, timeout: Math.round(Number(event.target.value) * 60) })} /></Field>
           </div>
           <label className="flex items-center gap-2 text-body text-ink-soft">
             <input type="checkbox" className="accent-accent-600" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} />启用此配置

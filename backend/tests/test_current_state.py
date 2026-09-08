@@ -1,5 +1,6 @@
 import json
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
@@ -10,6 +11,27 @@ from app.services import content_sha256
 from app.routers import current_state
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize('timeout', [None, 3600])
+def test_long_generation_timeout_is_used_by_state_and_summary(monkeypatch, timeout):
+    _, chapters, url = setup_book(1)
+    config = {'base_url': 'https://long-task.invalid/v1', 'model': 'long-task', 'api_key': 'test-only', 'enabled': True}
+    if timeout is not None:
+        config['timeout'] = timeout
+    provider = client.post('/api/llm/providers', json=config).json()
+    expected = timeout or 1800
+    assert provider['timeout'] == expected
+    original = httpx.AsyncClient
+    timeouts = []
+    def respond(request):
+        timeouts.append(request.extensions['timeout'])
+        return httpx.Response(200, json={'choices': [{'message': {'content': '当前进度：待续'}}]})
+    monkeypatch.setattr(current_state.httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(respond)))
+    assert client.post(url + '/generate', json={'base_version_id': None}).status_code == 200
+    assert client.post(f"/api/chapters/{chapters[0]['id']}/summary").json()['updated']
+    assert len(timeouts) == 2
+    assert all(t['read'] == expected and t['write'] == expected and t['connect'] == 30 for t in timeouts)
 
 
 def test_rate_limit_explains_wait_and_preserves_state(monkeypatch):

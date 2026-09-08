@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..llm_errors import llm_http_error
+from ..llm_timeout import llm_timeout
 from ..models import Book, Chapter, ChapterVersion, CurrentStateSettings, CurrentStateVersion, CurrentStateLease
 from ..services import content_sha256, read_content
 from .core import require_book
@@ -193,13 +194,15 @@ def get_context(book_id: int, db: Session = Depends(get_db)):
         return {"body_chapters": [], "chapter_count": 0, "summary_count": 0,
                 "missing_summary_chapter_ids": [], "stale_summary_chapter_ids": [], "input_characters": 0,
                 "model": provider.model if provider else None, "max_output_tokens": provider.max_tokens if provider else None,
+                "timeout_seconds": provider.timeout if provider else None,
                 "source_error": str(exc.detail)}
     return {"body_chapters": [{k: value for k, value in c.items() if k != "content"} for c in context["recent_chapters"]],
             "chapter_count": len(manifest["chapters"]), "summary_count": len(context["all_summaries"]),
             "missing_summary_chapter_ids": manifest["missing_summary_chapter_ids"],
             "stale_summary_chapter_ids": manifest["stale_summary_chapter_ids"],
             "input_characters": len(json.dumps(context, ensure_ascii=False)), "model": provider.model if provider else None,
-            "max_output_tokens": provider.max_tokens if provider else None}
+            "max_output_tokens": provider.max_tokens if provider else None,
+            "timeout_seconds": provider.timeout if provider else None}
 
 
 @router.get("/export.md")
@@ -249,7 +252,7 @@ def restore_version(book_id: int, version_id: int, payload: StateBase, db: Sessi
 
 
 async def call_model(provider, prompt, context):
-    async with httpx.AsyncClient(timeout=provider.timeout) as client:
+    async with httpx.AsyncClient(timeout=llm_timeout(provider.timeout)) as client:
         response = await client.post(provider.base_url.rstrip("/") + "/chat/completions",
             headers={"Authorization": f"Bearer {provider.api_key}"}, json={"model": provider.model,
                 "temperature": provider.temperature, "max_tokens": provider.max_tokens,

@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
+from .llm_timeout import DEFAULT_LLM_TIMEOUT
 
 
 class ORMModel(BaseModel):
@@ -111,7 +112,7 @@ class LLMProviderCreate(BaseModel):
     model: str
     temperature: float = Field(0.2, ge=0, le=2)
     max_tokens: int = Field(3000, ge=100)
-    timeout: int = Field(60, ge=5)
+    timeout: int = Field(DEFAULT_LLM_TIMEOUT, ge=5)
     enabled: bool = False
 
 

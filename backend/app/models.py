@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, Stri
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
+from .llm_timeout import DEFAULT_LLM_TIMEOUT
 
 
 def now() -> datetime:
@@ -433,7 +434,7 @@ class LLMProvider(Base):
     conversation_id: Mapped[str] = mapped_column(String(300), default="")
     temperature: Mapped[float] = mapped_column(Float, default=0.2)
     max_tokens: Mapped[int] = mapped_column(Integer, default=3000)
-    timeout: Mapped[int] = mapped_column(Integer, default=60)
+    timeout: Mapped[int] = mapped_column(Integer, default=DEFAULT_LLM_TIMEOUT)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)

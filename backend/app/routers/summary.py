@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..llm_errors import llm_http_error
+from ..llm_timeout import llm_timeout
 from ..models import Chapter, LLMProvider, SummaryLease
 from ..schemas import ChapterOut
 from ..services import content_sha256, serialize_chapter
@@ -82,7 +83,7 @@ async def generate_summary(provider: LLMProvider, title: str, content: str) -> s
         "\n【关键事件】按发生顺序列举。\n【状态变化】明确发生的变化。"
         "\n【结尾状态】章节结束时的情况。\n【未决事项】正文留下的问题；没有则写无。"
     )
-    async with httpx.AsyncClient(timeout=provider.timeout) as client:
+    async with httpx.AsyncClient(timeout=llm_timeout(provider.timeout)) as client:
         response = await client.post(provider.base_url.rstrip("/") + "/chat/completions",
             headers={"Authorization": f"Bearer {provider.api_key}"}, json={
                 "model": provider.model, "temperature": provider.temperature, "max_tokens": provider.max_tokens,

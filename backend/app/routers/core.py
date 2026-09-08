@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, defer
 
 from ..database import get_db
 from ..llm_errors import llm_http_error
+from ..llm_timeout import llm_timeout
 from ..text_import import decode_text, split_chapters
 from ..models import Book, Chapter, ChapterVersion, LLMProvider
 from ..schemas import (BookCreate, BookOut, BookUpdate, ChapterCreate, ChapterOut,
@@ -326,7 +327,7 @@ async def provider_models(provider_id: int, db: Session = Depends(get_db)):
     if not item.api_key:
         raise HTTPException(400, "请先保存 API Key。")
     try:
-        async with httpx.AsyncClient(timeout=item.timeout) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout(item.timeout)) as client:
             response = await client.get(item.base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {item.api_key}"})
             response.raise_for_status()
         values = response.json()["data"]
@@ -345,7 +346,7 @@ async def test_provider(provider_id: int, db: Session = Depends(get_db)):
     if not item.api_key:
         return {"ok": False, "message": "未填写 API Key，请先保存密钥再测试连接。"}
     try:
-        async with __import__("httpx").AsyncClient(timeout=item.timeout) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout(item.timeout)) as client:
             response = await client.post(item.base_url.rstrip("/") + "/chat/completions", headers={"Authorization": f"Bearer {item.api_key}"}, json={"model": item.model, "messages": [{"role": "user", "content": "请只回复：连接成功"}], "max_tokens": 10})
             response.raise_for_status()
         return {"ok": True, "message": "连接成功"}
@@ -355,6 +356,8 @@ async def test_provider(provider_id: int, db: Session = Depends(get_db)):
             host = parsed.hostname or item.base_url
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
             return {"ok": False, "message": f"无法连接 LLM 接口：{host}:{port}。请确认 Base URL 为 {item.base_url}。"}
+        if isinstance(exc, httpx.ConnectTimeout):
+            return {"ok": False, "message": "建立 LLM 网络连接超时，请检查服务状态及网络。生成等待时间与建立连接时间分别计算。"}
         if isinstance(exc, httpx.TimeoutException):
             return {"ok": False, "message": f"连接 LLM 接口超时（{item.timeout} 秒）。请检查服务状态或 Base URL。"}
         if isinstance(exc, httpx.HTTPStatusError):

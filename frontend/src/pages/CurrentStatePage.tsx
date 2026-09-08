@@ -11,7 +11,7 @@ import { Badge, Button, ConfirmModal, Empty, InlineError, Loading, MetaText, Mod
 type StateVersion = { id: number; book_id: number; version_number: number; content: string; source: string; note: string; model: string; prompt: string; created_at: string; source_manifest: { body_chapter_ids?: number[]; chapters?: { chapter_number: number; title: string }[] } }
 type CurrentState = { book_id: number; version: StateVersion | null; is_stale: boolean; generating: boolean }
 type StateSettings = { prompt: string; revision: number; default_prompt: string }
-type SourceContext = { body_chapters: { chapter_id: number; chapter_number: number; title: string }[]; chapter_count: number; summary_count: number; missing_summary_chapter_ids: number[]; stale_summary_chapter_ids: number[]; input_characters: number; model: string | null; max_output_tokens?: number | null; source_error?: string }
+type SourceContext = { body_chapters: { chapter_id: number; chapter_number: number; title: string }[]; chapter_count: number; summary_count: number; missing_summary_chapter_ids: number[]; stale_summary_chapter_ids: number[]; input_characters: number; model: string | null; max_output_tokens?: number | null; timeout_seconds?: number | null; source_error?: string }
 
 export function CurrentStatePage() {
   const bookId = useAppStore(state => state.currentBook?.id)
@@ -130,6 +130,7 @@ export function CurrentStatePage() {
       <div>正文范围：{context?.body_chapters.map(c => `第 ${c.chapter_number} 章`).join('、') || '暂无章节'} · 梗概 {context?.summary_count || 0} / {context?.chapter_count || 0} 章 · 输入约 {context?.input_characters.toLocaleString() || 0} 字符</div>
       <div>模型：{context?.model || '尚未启用，请到 LLM 配置设置'}。按当前章节顺序选取；输入完整发送，不自动截断。</div>
       {!!context?.max_output_tokens && <div>最大输出：{context.max_output_tokens.toLocaleString()} Tokens（在 LLM 配置修改）。这是生成结果的上限，不是输入容量；上面的输入字符数也不等于 Token 数。</div>}
+      {!!context?.timeout_seconds && <div>等待模型响应：{Number((context.timeout_seconds / 60).toFixed(1))} 分钟，可在 LLM 配置延长；修改后用于下一次请求。</div>}
       {!!context?.missing_summary_chapter_ids.length && <div>有 {context.missing_summary_chapter_ids.length} 章尚无梗概，将标明资料缺失。</div>}
       {!!context?.stale_summary_chapter_ids.length && <div className="text-warn-strong">有 {context.stale_summary_chapter_ids.length} 章梗概可能过时，建议先在正文页更新。</div>}
       {running && <div>等待模型返回。离开页面后可以返回查看结果；请勿重复生成。</div>}

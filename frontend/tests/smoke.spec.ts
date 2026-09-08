@@ -48,14 +48,21 @@ test('LLM 设置只提供普通 OpenAI Compatible 配置', async ({ page, reques
   await expect(page.getByText('WebAI-to-API')).toHaveCount(0)
   await expect(page.getByText('星月')).toHaveCount(0)
   await expect(page.getByText('API Key', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('生成等待（分钟）', { exact: true })).toHaveValue('30')
 })
 
 test('LLM 未保存配置不能误测旧配置，停用状态独立提示', async ({ page, request }) => {
   const book = await (await request.post(`${TEST_BACKEND_ORIGIN}/api/books`, { data: { title: TEST_BOOK_TITLE } })).json()
-  const provider = { id: 900, provider_name: '测试专用模型', provider_type: 'openai_compatible',
+  let provider = { id: 900, provider_name: '测试专用模型', provider_type: 'openai_compatible',
     base_url: 'https://model.invalid/v1', model: 'saved-model', temperature: 0.2,
     max_tokens: 8192, timeout: 60, enabled: false, has_api_key: true }
   await page.route('**/api/llm/providers', route => route.fulfill({ json: [provider] }))
+  await page.route('**/api/llm/providers/900', route => {
+    const payload = route.request().postDataJSON()
+    expect(payload.timeout).toBe(3600)
+    provider = { ...provider, ...payload }
+    return route.fulfill({ json: provider })
+  })
   let calls = 0
   await page.route('**/api/llm/providers/900/test', route => {
     calls++; return route.fulfill({ json: { ok: true, message: '连接成功' } })
@@ -71,4 +78,9 @@ test('LLM 未保存配置不能误测旧配置，停用状态独立提示', asyn
   await expect(page.getByText('配置有未保存修改，请先保存，再测试连接或读取模型。')).toBeVisible()
   await page.getByLabel('模型名', { exact: true }).fill('saved-model')
   await expect(button).toBeEnabled()
+  await page.getByLabel('生成等待（分钟）', { exact: true }).fill('60')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(button).toBeEnabled()
+  expect(provider.timeout).toBe(3600)
+  await expect(page.getByLabel('生成等待（分钟）', { exact: true })).toHaveValue('60')
 })
