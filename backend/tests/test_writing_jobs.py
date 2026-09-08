@@ -14,6 +14,11 @@ from app.routers import writing_jobs as writing
 client = TestClient(app)
 
 
+def test_model_reported_conflict_is_not_saved_as_a_chapter():
+    with pytest.raises(ValueError, match="资料冲突"):
+        writing.parse_chapter_text("资料冲突：第17章销毁物资\n速查却记为库存，需先核对。")
+
+
 @pytest.fixture(autouse=True)
 def isolate():
     with SessionLocal.begin() as db:
@@ -50,7 +55,7 @@ def mock_models(monkeypatch, before=None):
         if kind == 'writing':
             assert request.url.host == 'gemini.invalid'
             assert request.extensions['timeout']['read'] == 3600
-            assert set(context) == {'book_title', 'next_chapter_number', 'current_state', 'outline'}
+            assert set(context) == {'book_title', 'next_chapter_number', 'current_state', 'outline', 'recent_chapters', 'all_summaries', 'writing_rules'}
             assert context['outline']['content'] == '未来大纲全文'
             text = f"第{context['next_chapter_number']}章 新的相遇{context['next_chapter_number']}\n\n完整正文\n角色开始新的行动。"
         else:
@@ -159,3 +164,36 @@ def test_waits_for_existing_generation_can_stop_and_validates_count(monkeypatch)
     assert client.get(f"/api/writing-jobs/{job['id']}").json()['status'] == 'cancelled'
     with SessionLocal.begin() as db:
         db.execute(delete(CurrentStateLease).where(CurrentStateLease.book_id == bid))
+
+
+def test_writing_receives_five_full_bodies_all_summaries_and_selected_rules(monkeypatch):
+    bid, first, _, job, _ = setup()
+    for number in range(2, 8):
+        client.post(f'/api/books/{bid}/chapters', json={'title': f'章{number}', 'content': f'第{number}章原文' + '完整保留。' * 1000})
+    rule = client.post(f'/api/books/{bid}/materials', json={'title': 'AI写作禁令skill', 'content': '不得用未来称呼。'}).json()
+    key = rule['material_key']
+    response = client.put(f'/api/books/{bid}/current-state/settings', json={'prompt': '只记事实', 'base_revision': 0, 'writing_rule_keys': [key]})
+    assert response.status_code == 200, response.text
+    calls = mock_models(monkeypatch)
+    assert run(job)['status'] == 'completed'
+    payload = next(context for kind, context in calls if kind == 'writing')
+    assert [c['chapter_number'] for c in payload['recent_chapters']] == [3, 4, 5, 6, 7]
+    assert payload['recent_chapters'][-1]['content'] == '第7章原文' + '完整保留。' * 1000
+    assert len(payload['all_summaries']) == 7
+    assert payload['writing_rules'][0]['content'] == '不得用未来称呼。'
+    assert payload['writing_rules'][0]['material_key'] == key
+
+
+def test_rule_change_during_writing_rejects_generated_chapter(monkeypatch):
+    bid, _, _, job, _ = setup()
+    rule = client.post(f'/api/books/{bid}/materials', json={'title': '规则', 'content': '原规则'}).json()
+    key = rule['material_key']
+    client.put(f'/api/books/{bid}/current-state/settings', json={'prompt': '只记事实', 'base_revision': 0, 'writing_rule_keys': [key]})
+    def change(kind, context):
+        if kind == 'writing':
+            result = client.post(f'/api/books/{bid}/materials/{key}/versions', json={'title': '规则改名', 'content': '新规则', 'base_version_id': rule['id']})
+            assert result.status_code == 200, result.text
+    mock_models(monkeypatch, change)
+    result = run(job)
+    assert result['status'] == 'failed' and result['saved_count'] == 0
+    assert '写作规则' in result['message']

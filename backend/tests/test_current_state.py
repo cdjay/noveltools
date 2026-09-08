@@ -216,3 +216,50 @@ def test_outline_changes_invalidate_state_and_reject_inflight_result(monkeypatch
     monkeypatch.setattr(current_state, 'call_model', blank)
     assert client.post(url + '/generate', json={'base_version_id': saved['id']}).status_code == 200
     assert not client.get(url).json()['is_stale']
+
+
+def test_selected_rules_provenance_isolated_validated_and_roundtrips(monkeypatch):
+    book, _, url = setup_book(2)
+    bid = book['id']
+    rule = client.post(f'/api/books/{bid}/materials', json={'title': 'AI写作禁令skill', 'content': '规则全文' * 2000}).json()
+    key = rule['material_key']
+    other = client.post('/api/books', json={'title': '另一本规则'}).json()
+    alien = client.post(f"/api/books/{other['id']}/materials", json={'title': '不能送出', 'content': '别书规则'}).json()
+    assert client.put(url + '/settings', json={'prompt': '只记事实', 'base_revision': 0, 'writing_rule_keys': [alien['material_key']]}).status_code == 400
+    assert client.put(url + '/settings', json={'prompt': '只记事实', 'base_revision': 0, 'writing_rule_keys': [key, key]}).status_code == 400
+    assert client.put(url + '/settings', json={'prompt': '只记事实', 'base_revision': 0, 'writing_rule_keys': [key]}).status_code == 200
+    captured = []
+    original = httpx.AsyncClient
+    def respond(request):
+        captured.append(json.loads(json.loads(request.content)['messages'][1]['content']))
+        return httpx.Response(200, json={'choices': [{'message': {'content': '## 当前进度\n正文事实'}}]})
+    monkeypatch.setattr(current_state.httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(respond)))
+    generated = client.post(url + '/generate', json={'base_version_id': None})
+    assert generated.status_code == 200, generated.text
+    assert captured[0]['writing_rules'] == [{'material_key': key, 'title': rule['title'], 'version_number': 1, 'content': '规则全文' * 2000}]
+    assert not client.get(url).json()['is_stale']
+    backup = client.get(f'/api/books/{bid}/backup')
+    restored = client.post('/api/backups/restore', files={'file': ('book.json', backup.content, 'application/json')})
+    assert restored.status_code == 200, restored.text
+    restored_url = f"/api/books/{restored.json()['id']}/current-state"
+    assert client.get(restored_url + '/settings').json()['writing_rule_keys'] == [key]
+    assert not client.get(restored_url).json()['is_stale']
+    changed = client.post(f'/api/books/{bid}/materials/{key}/versions', json={'title': '改名仍选中', 'content': '修改规则', 'base_version_id': rule['id']})
+    assert changed.status_code == 200, changed.text
+    assert client.get(url).json()['is_stale']
+    # Old callers that only edit the prompt preserve selection.
+    settings = client.put(url + '/settings', json={'prompt': '修改提示词', 'base_revision': 1}).json()
+    assert settings['writing_rule_keys'] == [key]
+
+
+def test_prompt_edit_during_state_request_keeps_old_state(monkeypatch):
+    _, _, url = setup_book(1)
+    saved = client.post(url + '/versions', json={'base_version_id': None, 'content': '旧稿'}).json()
+    original = httpx.AsyncClient
+    def respond(request):
+        assert client.put(url + '/settings', json={'prompt': '新要求', 'base_revision': 0}).status_code == 200
+        return httpx.Response(200, json={'choices': [{'message': {'content': '旧要求生成的稿件'}}]})
+    monkeypatch.setattr(current_state.httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(respond)))
+    response = client.post(url + '/generate', json={'base_version_id': saved['id']})
+    assert response.status_code == 409
+    assert client.get(url).json()['version']['id'] == saved['id']

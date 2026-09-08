@@ -196,6 +196,7 @@ class CurrentStateSettings(Base):
     book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
     prompt: Mapped[str] = mapped_column(Text)
     revision: Mapped[int] = mapped_column(Integer, default=1)
+    writing_rule_keys: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class CurrentStateVersion(Base):

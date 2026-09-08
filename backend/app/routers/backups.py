@@ -66,6 +66,7 @@ class BookArchive(BaseModel):
     outlines: list[SavedVersion]
     current_state_versions: list[SavedStateVersion] = Field(default_factory=list)
     current_state_prompt: str | None = None
+    writing_rule_keys: list[str] = Field(default_factory=list, max_length=30)
     material_versions: list[SavedMaterialVersion] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -78,6 +79,9 @@ class BookArchive(BaseModel):
         unique([o.version_number for o in self.outlines])
         unique([s.version_number for s in self.current_state_versions])
         unique([(m.material_key, m.version_number) for m in self.material_versions])
+        unique(self.writing_rule_keys)
+        if not set(self.writing_rule_keys) <= {m.material_key for m in self.material_versions}:
+            raise ValueError("写作规则资料引用无效")
         for material in self.material_versions:
             if not material.title.strip() or (material.material_key == 'writing-rules' and material.title != '写作规则'):
                 raise ValueError("资料标题无效")
@@ -121,6 +125,7 @@ def export_backup(book_id: int, db: Session = Depends(get_db)):
             chapters=saved, outlines=[version_out(o, o.content) for o in outlines],
             current_state_versions=[version_out(s, s.content) | {"model": s.model, "prompt": s.prompt, "source_manifest": s.source_manifest} for s in states],
             current_state_prompt=state_settings.prompt if state_settings else None,
+            writing_rule_keys=state_settings.writing_rule_keys if state_settings else [],
             material_versions=[version_out(m, m.content) | {"material_key": m.material_key, "title": m.title} for m in materials])
     except ValidationError:
         raise HTTPException(409, "书籍的版本引用不完整，请先修复数据后备份。")
@@ -182,7 +187,7 @@ async def restore_backup(file: UploadFile = File(...), db: Session = Depends(get
         manifest = remap_manifest(state.source_manifest, chapter_ids, version_ids, book.title)
         db.add(CurrentStateVersion(book_id=book.id, source_manifest=manifest, **fields))
     if archive.current_state_prompt is not None:
-        db.add(CurrentStateSettings(book_id=book.id, prompt=archive.current_state_prompt))
+        db.add(CurrentStateSettings(book_id=book.id, prompt=archive.current_state_prompt, writing_rule_keys=archive.writing_rule_keys))
     for material in archive.material_versions:
         db.add(BookMaterialVersion(book_id=book.id, **material.model_dump(exclude={'id'})))
     db.commit()
