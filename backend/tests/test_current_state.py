@@ -96,3 +96,24 @@ def test_missing_summaries_and_duplicate_generation(monkeypatch):
         return '## 当前进度\n资料待补充'
     monkeypatch.setattr(current_state, 'call_model', nested)
     assert client.post(url + '/generate', json={'base_version_id': None}).status_code == 200
+
+
+def test_backup_roundtrip_and_legacy_archive():
+    book, chapters, url = setup_book(2)
+    client.put(url + '/settings', json={'prompt': '本书专用提示词', 'base_revision': 0})
+    client.post(url + '/versions', json={'content': '## 当前进度\n待续', 'base_version_id': None})
+    backup = client.get(f"/api/books/{book['id']}/backup")
+    assert backup.json()['schema_version'] == 2
+    copied = client.post('/api/backups/restore', files={'file': ('state.json', backup.content)}).json()
+    copied_url = f"/api/books/{copied['id']}/current-state"
+    state = client.get(copied_url).json()
+    assert state['version']['content'] == '## 当前进度\n待续'
+    assert state['is_stale'] is False
+    assert state['version']['source_manifest']['body_chapter_ids'] != [c['id'] for c in chapters]
+    assert client.get(copied_url + '/settings').json()['prompt'] == '本书专用提示词'
+    old = backup.json()
+    old['schema_version'] = 1
+    del old['current_state_versions'], old['current_state_prompt']
+    restored = client.post('/api/backups/restore', files={'file': ('old.json', json.dumps(old).encode())})
+    assert restored.status_code == 200
+    assert client.get(f"/api/books/{restored.json()['id']}/current-state").json()['version'] is None

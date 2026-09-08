@@ -1,5 +1,6 @@
 """Portable book archives, restored as a new book in one transaction."""
 from datetime import datetime
+from copy import deepcopy
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Book, Chapter, ChapterVersion, OutlineTextVersion
+from ..models import Book, Chapter, ChapterVersion, OutlineTextVersion, CurrentStateVersion, CurrentStateSettings
 from ..schemas import BookCreate, BookOut
 from ..services import count_words, read_content, serialize_book
 from .core import require_book
@@ -43,15 +44,23 @@ class SavedChapter(BaseModel):
     versions: list[SavedVersion]
 
 
+class SavedStateVersion(SavedVersion):
+    model: str = ""
+    prompt: str = ""
+    source_manifest: dict = Field(default_factory=dict)
+
+
 class BookArchive(BaseModel):
     format: Literal["noveltools-book"] = "noveltools-book"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     book: BookCreate
     created_at: datetime
     updated_at: datetime
     current_chapter_id: int | None
     chapters: list[SavedChapter] = Field(max_length=10000)
     outlines: list[SavedVersion]
+    current_state_versions: list[SavedStateVersion] = Field(default_factory=list)
+    current_state_prompt: str | None = None
 
     @model_validator(mode="after")
     def valid_references(self):
@@ -61,6 +70,7 @@ class BookArchive(BaseModel):
         unique([c.id for c in self.chapters])
         unique([c.chapter_number for c in self.chapters])
         unique([o.version_number for o in self.outlines])
+        unique([s.version_number for s in self.current_state_versions])
         if self.current_chapter_id is not None and self.current_chapter_id not in {c.id for c in self.chapters}:
             raise ValueError("当前章节引用无效")
         for chapter in self.chapters:
@@ -90,11 +100,15 @@ def export_backup(book_id: int, db: Session = Depends(get_db)):
         saved.append({key: getattr(chapter, key) for key in SavedChapter.model_fields if key != 'versions'} |
                      {'versions': [version_out(v, read_content(v)) for v in versions]})
     outlines = db.scalars(select(OutlineTextVersion).where(OutlineTextVersion.book_id == book_id).order_by(OutlineTextVersion.version_number)).all()
+    states = db.scalars(select(CurrentStateVersion).where(CurrentStateVersion.book_id == book_id).order_by(CurrentStateVersion.version_number)).all()
+    state_settings = db.get(CurrentStateSettings, book_id)
     try:
         archive = BookArchive(book=BookCreate.model_validate({key: getattr(book, key) for key in BookCreate.model_fields}),
             created_at=book.created_at, updated_at=book.updated_at,
             current_chapter_id=book.current_chapter_id if book.current_chapter_id in {c.id for c in chapters} else None,
-            chapters=saved, outlines=[version_out(o, o.content) for o in outlines])
+            chapters=saved, outlines=[version_out(o, o.content) for o in outlines],
+            current_state_versions=[version_out(s, s.content) | {"model": s.model, "prompt": s.prompt, "source_manifest": s.source_manifest} for s in states],
+            current_state_prompt=state_settings.prompt if state_settings else None)
     except ValidationError:
         raise HTTPException(409, "书籍的版本引用不完整，请先修复数据后备份。")
     return Response(archive.model_dump_json(indent=2), media_type="application/json",
@@ -115,7 +129,8 @@ async def parse_archive(file):
 async def preview_backup(file: UploadFile = File(...)):
     archive = await parse_archive(file)
     return {"title": archive.book.title, "chapters": len(archive.chapters),
-            "versions": sum(len(c.versions) for c in archive.chapters), "outlines": len(archive.outlines)}
+            "versions": sum(len(c.versions) for c in archive.chapters), "outlines": len(archive.outlines),
+            "current_states": len(archive.current_state_versions)}
 
 
 @router.post("/backups/restore", response_model=BookOut)
@@ -125,11 +140,13 @@ async def restore_backup(file: UploadFile = File(...), db: Session = Depends(get
     book.title += "（恢复副本）"
     db.add(book)
     db.flush()
+    chapter_ids, version_ids = {}, {}
     for saved in archive.chapters:
         values = saved.model_dump(exclude={'id', 'versions', 'current_version_id', 'summary_source_version_id'})
         chapter = Chapter(book_id=book.id, **values)
         db.add(chapter)
         db.flush()
+        chapter_ids[saved.id] = chapter.id
         ids, counts = {}, {}
         for version in saved.versions:
             fields = version.model_dump(exclude={'id', 'content'})
@@ -138,6 +155,7 @@ async def restore_backup(file: UploadFile = File(...), db: Session = Depends(get
             db.add(restored)
             db.flush()
             ids[version.id], counts[version.id] = restored.id, restored.word_count
+            version_ids[version.id] = restored.id
         chapter.current_version_id = ids[saved.current_version_id]
         chapter.word_count = counts[saved.current_version_id]
         chapter.summary_source_version_id = ids.get(saved.summary_source_version_id)
@@ -145,5 +163,29 @@ async def restore_backup(file: UploadFile = File(...), db: Session = Depends(get
             book.current_chapter_id = chapter.id
     for outline in archive.outlines:
         db.add(OutlineTextVersion(book_id=book.id, **outline.model_dump(exclude={'id'})))
+    for state in archive.current_state_versions:
+        fields = state.model_dump(exclude={'id', 'source_manifest'})
+        manifest = remap_manifest(state.source_manifest, chapter_ids, version_ids, book.title)
+        db.add(CurrentStateVersion(book_id=book.id, source_manifest=manifest, **fields))
+    if archive.current_state_prompt is not None:
+        db.add(CurrentStateSettings(book_id=book.id, prompt=archive.current_state_prompt))
     db.commit()
     return serialize_book(book, db)
+
+
+def remap_manifest(source, chapter_ids, version_ids, title):
+    manifest = deepcopy(source)
+    if not manifest:
+        return manifest
+    # Deleted historical sources remain unresolved rather than pointing at unrelated new IDs.
+    try:
+        manifest['book_title'] = title
+        for chapter in manifest['chapters']:
+            chapter['chapter_id'] = chapter_ids.get(chapter['chapter_id'])
+            chapter['version_id'] = version_ids.get(chapter['version_id'])
+            chapter['summary_source_version_id'] = version_ids.get(chapter['summary_source_version_id'])
+        for key in ('body_chapter_ids', 'missing_summary_chapter_ids', 'stale_summary_chapter_ids'):
+            manifest[key] = [chapter_ids.get(value) for value in manifest[key]]
+    except (KeyError, TypeError, AttributeError):
+        raise HTTPException(400, "状态速查的来源记录无效，未恢复任何内容。")
+    return manifest
