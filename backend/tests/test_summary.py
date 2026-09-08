@@ -112,7 +112,7 @@ def test_newer_body_is_not_assigned_outdated_summary(monkeypatch, chapter):
     assert result["chapter"]["current_content"] == "生成途中另存的新正文"
 
 
-def test_batch_continues_after_one_chapter_fails(monkeypatch, chapter):
+def test_batch_stops_after_one_chapter_fails(monkeypatch, chapter):
     configure()
     second = client.post(f"/api/books/{chapter['book_id']}/chapters", json={"title": "第二章", "content": "新的线索"}).json()
 
@@ -121,8 +121,8 @@ def test_batch_continues_after_one_chapter_fails(monkeypatch, chapter):
         return "第二章梗概"
     monkeypatch.setattr(summary, "generate_summary", fake)
     result = client.post(f"/api/books/{chapter['book_id']}/chapter-summaries").json()
-    assert (result["updated"], result["failed"]) == (1, 1)
-    assert client.get(f"/api/chapters/{second['id']}").json()["summary"] == "第二章梗概"
+    assert (result["updated"], result["failed"]) == (0, 1)
+    assert client.get(f"/api/chapters/{second['id']}").json()["summary"] == ""
 
 
 def test_summary_response_formats():

@@ -10,10 +10,11 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
-from ..llm_errors import llm_http_error
+from ..llm_failover import generation_http_error as llm_http_error
 from ..llm_routing import resolve_provider, MODULES
+from ..llm_failover import snapshot_chain, run_with_fallback, writing_job_context, check_response
 from ..llm_timeout import llm_timeout
-from ..models import Book, Chapter, ChapterVersion, CurrentStateLease, LLMProvider, SummaryJob, SummaryLease, WritingJob, WritingJobItem
+from ..models import Book, Chapter, ChapterVersion, CurrentStateLease, LLMProvider, SummaryJob, SummaryLease, WritingJob, WritingJobItem, LLMFailoverEvent
 from ..schemas import ChapterCreate
 from ..services import content_sha256, next_chapter_number, read_content
 from .core import add_chapter, require_book
@@ -42,8 +43,7 @@ def provider_snapshots(db):
         provider = resolve_provider(db, module)
         if not provider:
             raise HTTPException(400, f"请先在 LLM 模块分流中配置{MODULES[module][0]}；正文默认使用 Gemini。")
-        result[module] = {"id": provider.id, "created_at": provider.created_at.isoformat(),
-                          "config": {key: getattr(provider, key) for key in ("model", "base_url", "temperature", "max_tokens", "timeout")}}
+        result[module] = snapshot_chain(db, module)
     return result
 
 
@@ -60,7 +60,9 @@ def frozen_provider(db, job, module):
 
 def job_out(job, db):
     items = db.scalars(select(WritingJobItem).where(WritingJobItem.job_id == job.id).order_by(WritingJobItem.sequence)).all()
-    return {"id": job.id, "book_id": job.book_id, "status": job.status, "step": job.step, "message": job.message,
+    events = db.scalars(select(LLMFailoverEvent).where(LLMFailoverEvent.writing_job_id == job.id).order_by(LLMFailoverEvent.id.desc()).limit(100)).all()
+    return {"failover_events": [{"id": event.id, "time": event.created_at.isoformat() + 'Z', "text": event.message} for event in reversed(events)],
+            "id": job.id, "book_id": job.book_id, "status": job.status, "step": job.step, "message": job.message,
             "target_count": job.target_count, "completed_count": sum(i.status == "completed" for i in items),
             "saved_count": sum(i.status != "pending" for i in items),
             "model": job.providers.get("chapter_writing", {}).get("config", {}).get("model", ""),
@@ -148,7 +150,7 @@ async def generate_chapter(provider, context):
                 "temperature": provider.temperature, "max_tokens": provider.max_tokens,
                 "messages": [{"role": "system", "content": WRITING_PROMPT},
                              {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]})
-        response.raise_for_status()
+        check_response(response)
     try:
         choice = response.json()["choices"][0]
         if choice.get("finish_reason") == "length":
@@ -199,7 +201,7 @@ async def tick(job_id):
             if not chapter.summary.strip() or chapter.summary_source_version_id != chapter.current_version_id or chapter.summary_content_sha256 != content_sha256(body):
                 _, saved = frozen_provider(db, job, "batch_summary")
                 mark_step(db, job, "summaries", f"正在补齐或更新第 {chapter.chapter_number} 章梗概。")
-                result = await update_summary(chapter.id, db, provider_id=saved['id'], config=saved['config'])
+                result = await update_summary(chapter.id, db, provider_id=saved['id'], config={'_chain': saved})
                 if not result.updated:
                     if '正在生成梗概' in result.message:
                         return True
@@ -212,7 +214,7 @@ async def tick(job_id):
         if not state or not state.content.strip() or state.source_manifest != manifest:
             provider, _ = frozen_provider(db, job, "current_state")
             mark_step(db, job, "state", "正在更新当前状态速查。")
-            await current_state.generate_state(job.book_id, current_state.StateBase(base_version_id=state.id if state else None), db, provider)
+            await current_state.generate_state(job.book_id, current_state.StateBase(base_version_id=state.id if state else None), db, provider, chain_override=job.providers["current_state"])
             return True
         if item.status == "generated":
             # Preparation now includes this saved chapter: its summary and state are complete.
@@ -227,7 +229,9 @@ async def tick(job_id):
         context = {"book_title": sources['book_title'], "next_chapter_number": next_chapter_number(db, job.book_id),
                    "current_state": {"version_number": state.version_number, "content": state.content}, "outline": sources['outline']}
         mark_step(db, job, "writing", f"正在生成第 {item.sequence} / {job.target_count} 章正文。")
-        title, content = await generate_chapter(provider, context)
+        (title, content), actual = await run_with_fallback(job.providers['chapter_writing'], 'chapter_writing',
+            lambda selected: generate_chapter(selected, context))
+        provider = actual
         lock_book(db, job.book_id)
         if manifest != current_state.snapshot(db, job.book_id)[0] or current_state.latest(db, job.book_id).id != state_id:
             raise ValueError("生成正文期间大纲、正文、梗概或速查已变化，结果未写入；请继续任务重新核对。")
@@ -242,6 +246,7 @@ async def tick(job_id):
 
 
 async def run_job(job_id):
+    token = writing_job_context.set(job_id)
     try:
         while await tick(job_id):
             await asyncio.sleep(0.5)
@@ -262,6 +267,8 @@ async def run_job(job_id):
             job = db.get(WritingJob, job_id)
             if job:
                 job.status, job.message = "failed", message
+    finally:
+        writing_job_context.reset(token)
 
 
 def recover_interrupted():

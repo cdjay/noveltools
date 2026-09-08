@@ -10,9 +10,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..llm_errors import llm_http_error
+from ..llm_failover import generation_http_error as llm_http_error
 from ..llm_timeout import llm_timeout
 from ..llm_routing import resolve_provider
+from ..llm_failover import snapshot_chain, snapshot_provider, run_with_fallback, check_response
 from ..models import Chapter, LLMProvider, SummaryLease
 from ..schemas import ChapterOut
 from ..services import content_sha256, serialize_chapter
@@ -87,7 +88,7 @@ async def generate_summary(provider: LLMProvider, title: str, content: str) -> s
                 "messages": [{"role": "system", "content": prompt},
                              {"role": "user", "content": json.dumps({"title": title, "content": content}, ensure_ascii=False)}],
             })
-        response.raise_for_status()
+        check_response(response)
         try:
             choice = response.json()["choices"][0]
             if choice.get("finish_reason") == "length":
@@ -134,25 +135,36 @@ async def _update_summary(chapter_id: int, db: Session, *, skip_unchanged: bool 
     if skip_unchanged and chapter.summary and chapter.summary_content_sha256 == sha:
         return result("skipped", "正文未变化，保留已有梗概。")
     try:
-        provider = db.get(LLMProvider, provider_id) if provider_id is not None else summary_provider(db)
+        if config and config.get('_chain'):
+            chain = config['_chain']
+        elif provider_id is not None:
+            provider = db.get(LLMProvider, provider_id)
+            if not provider or not provider.api_key.strip():
+                return result("failed", "任务模型已删除或未设置密钥，请检查模块分流。")
+            chain = snapshot_provider(provider)
+            if config:
+                chain['config'] = config
+        else:
+            chain = snapshot_chain(db, 'chapter_summary')
     except HTTPException as exc:
         return result("failed", str(exc.detail))
-    if not provider or provider.provider_type != "openai_compatible" or not provider.api_key:
-        return result("failed", "请在 LLM 配置中设置可用的默认模型或模块分流。")
-    if config:
-        provider = LLMProvider(**config, api_key=provider.api_key)
-    model = provider.model
+    model = chain['config']['model']
     # Release the read transaction during the network call so concurrent saves remain usable.
     db.commit()
     try:
-        summary = await generate_summary(provider, snapshot["title"], content)
+        summary, actual = await run_with_fallback(chain, 'batch_summary' if provider_id is not None else 'chapter_summary',
+            lambda provider: generate_summary(provider, snapshot["title"], content))
+        model = actual.model
         changed = db.execute(update(Chapter).where(Chapter.id == chapter_id, Chapter.current_version_id == source_id)
             .values(summary=summary, summary_content_sha256=sha, summary_source_version_id=source_id,
                     summary_model=model, summary_updated_at=datetime.utcnow()))
         db.commit()
         if not changed.rowcount:
             return result("failed", "生成期间正文已更新或章节已删除，结果未写入，请按最新正文重新生成。")
-        return result("completed", "本章梗概已生成并保存。")
+        return result("completed", f"本章梗概已生成并保存。使用模型：{model}。")
+    except HTTPException as exc:
+        db.rollback()
+        return result("failed", str(exc.detail))
     except httpx.HTTPStatusError as exc:
         db.rollback()
         return result("failed", llm_http_error(exc, model))
@@ -177,12 +189,14 @@ async def summarize_book(book_id: int, db: Session = Depends(get_db)):
     if not provider:
         raise HTTPException(400, "请在 LLM 配置中设置可用的默认模型或批量梗概分流。")
     provider_id = provider.id
-    config = {key: getattr(provider, key) for key in ("model", "base_url", "temperature", "max_tokens", "timeout")}
+    config = {"_chain": snapshot_chain(db, "batch_summary")}
     results = []
     for chapter_id in ids:
         if db.get(Chapter, chapter_id, populate_existing=True) is None:
             results.append(SummaryResult(chapter_id=chapter_id, status="skipped", updated=False, skipped=True, message="章节已删除，跳过。"))
             continue
         results.append(await update_summary(chapter_id, db, skip_unchanged=True, provider_id=provider_id, config=config))
+        if results[-1].status == 'failed':
+            break
     return SummaryBatchResult(book_id=book_id, total=len(results), updated=sum(item.updated for item in results),
                               skipped=sum(item.skipped for item in results), failed=sum(item.status == "failed" for item in results), results=results)

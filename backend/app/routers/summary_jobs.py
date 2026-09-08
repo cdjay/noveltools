@@ -9,6 +9,7 @@ from ..database import SessionLocal, get_db
 from ..models import Book, Chapter, SummaryJob, SummaryJobItem, SummaryLease, CurrentStateLease
 from .core import require_book
 from .summary import summary_provider, update_summary
+from ..llm_failover import snapshot_chain
 
 router = APIRouter(prefix="/api")
 ACTIVE = ("queued", "running", "cancelling")
@@ -44,7 +45,7 @@ def create_job(book_id: int, db: Session = Depends(get_db)):
     provider = summary_provider(db, "batch_summary")
     if not provider:
         raise HTTPException(400, "请设置可用的默认模型或批量梗概分流。")
-    job = SummaryJob(book_id=book_id, provider_id=provider.id, model=provider.model, provider_config=provider_config(provider))
+    job = SummaryJob(book_id=book_id, provider_id=provider.id, model=provider.model, provider_config={**provider_config(provider), "_chain": snapshot_chain(db, "batch_summary")})
     db.add(job)
     db.flush()
     chapters = db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.chapter_number)).all()
@@ -92,7 +93,7 @@ def resume_job(job_id: int, db: Session = Depends(get_db)):
     job.status = "queued"
     job.provider_id = provider.id
     job.model = provider.model
-    job.provider_config = provider_config(provider)
+    job.provider_config = {**provider_config(provider), "_chain": snapshot_chain(db, "batch_summary")}
     db.commit()
     return job_out(job, db)
 
@@ -143,6 +144,10 @@ async def run_job(job_id):
             status, message = "failed", "处理失败，已有梗概保留。请检查服务后重试。"
         with SessionLocal.begin() as db:
             db.execute(update(SummaryJobItem).where(SummaryJobItem.id == item_id).values(status=status, message=message))
+            if status == 'failed':
+                db.execute(update(SummaryJob).where(SummaryJob.id == job_id).values(status='failed'))
+        if status == 'failed':
+            return
 
 
 async def worker():

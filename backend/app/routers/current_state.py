@@ -10,8 +10,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..llm_errors import llm_http_error
+from ..llm_failover import generation_http_error as llm_http_error
 from ..llm_timeout import llm_timeout
+from ..llm_failover import snapshot_chain, run_with_fallback, check_response
 from ..models import Book, Chapter, ChapterVersion, CurrentStateSettings, CurrentStateVersion, CurrentStateLease, OutlineTextVersion
 from ..services import content_sha256, read_content
 from .core import require_book
@@ -272,7 +273,7 @@ async def call_model(provider, prompt, context):
                 "temperature": provider.temperature, "max_tokens": provider.max_tokens,
                 "messages": [{"role": "system", "content": prompt},
                              {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]})
-        response.raise_for_status()
+        check_response(response)
         try:
             choice = response.json()["choices"][0]
             if choice.get("finish_reason") == "length":
@@ -295,12 +296,13 @@ async def generate(book_id: int, payload: StateBase, db: Session = Depends(get_d
     return await generate_state(book_id, payload, db)
 
 
-async def generate_state(book_id: int, payload: StateBase, db: Session, provider_override=None):
+async def generate_state(book_id: int, payload: StateBase, db: Session, provider_override=None, chain_override=None):
     lock_book(db, book_id)
     check_base(db, book_id, payload.base_version_id)
     provider = provider_override if provider_override is not None else summary_provider(db, "current_state")
     if not provider:
         raise HTTPException(400, "请在 LLM 配置中设置可用的默认模型或当前状态速查分流。")
+    chain = chain_override or (snapshot_chain(db, "current_state") if provider_override is None else None)
     manifest, context = snapshot(db, book_id)
     if not context["recent_chapters"]:
         raise HTTPException(400, "本书还没有章节，请先创建或导入正文。")
@@ -313,7 +315,11 @@ async def generate_state(book_id: int, payload: StateBase, db: Session, provider
         raise HTTPException(409, "本书正在生成当前状态速查，请等待完成。")
     model = provider.model
     try:
-        content = await call_model(provider, prompt, context)
+        if chain:
+            content, actual = await run_with_fallback(chain, 'current_state', lambda selected: call_model(selected, prompt, context))
+            model = actual.model
+        else:
+            content = await call_model(provider, prompt, context)
         lock_book(db, book_id)
         if manifest != snapshot(db, book_id)[0]:
             raise HTTPException(409, "生成期间大纲、正文、章节顺序或梗概已变化，结果未写入，请重新生成。")

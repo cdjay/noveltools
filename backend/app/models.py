@@ -485,3 +485,27 @@ class LLMProvider(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class LLMRouteFallback(Base):
+    __tablename__ = "llm_route_fallbacks"
+    module: Mapped[str] = mapped_column(ForeignKey("llm_module_routes.module", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider_id: Mapped[int | None] = mapped_column(ForeignKey("llm_providers.id", ondelete="SET NULL"), nullable=True)
+
+
+class LLMProviderCooldown(Base):
+    __tablename__ = "llm_provider_cooldowns"
+    provider_id: Mapped[int] = mapped_column(ForeignKey("llm_providers.id", ondelete="CASCADE"), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    until: Mapped[datetime] = mapped_column(DateTime)
+    reason: Mapped[str] = mapped_column(String(200))
+
+
+class LLMFailoverEvent(Base):
+    __tablename__ = "llm_failover_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    writing_job_id: Mapped[int] = mapped_column(ForeignKey("writing_jobs.id", ondelete="CASCADE"), index=True)
+    module: Mapped[str] = mapped_column(String(60))
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

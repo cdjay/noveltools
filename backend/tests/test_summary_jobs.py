@@ -58,18 +58,18 @@ def test_restart_waits_for_explicit_resume_and_retries_failed_only(monkeypatch):
         return content
     monkeypatch.setattr(summary, 'generate_summary', fake)
     failed = run(job)
-    assert (failed['updated'], failed['failed'], failed['status']) == (2, 1, 'failed')
+    assert (failed['updated'], failed['failed'], failed['status']) == (1, 1, 'failed')
     client.post(f"/api/summary-jobs/{job['id']}/resume")
     summary_jobs.recover_interrupted()
     assert client.get(f"/api/summary-jobs/{job['id']}").json()['status'] == 'interrupted'
-    assert calls == ['0', '1', '2']
+    assert calls == ['0', '1']
     async def good(provider, title, content):
         calls.append(title)
         return content
     monkeypatch.setattr(summary, 'generate_summary', good)
     client.post(f"/api/summary-jobs/{job['id']}/resume")
     assert run(job)['updated'] == 3
-    assert calls == ['0', '1', '2', '1']
+    assert calls == ['0', '1', '1', '2']
 
 
 def test_lifespan_worker_processes_user_started_queue(monkeypatch):
