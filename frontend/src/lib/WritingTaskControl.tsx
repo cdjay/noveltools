@@ -9,6 +9,7 @@ import { api } from '../api/client'
 import { Button, MetaText, Select, toast } from './ui'
 
 type Job = { id: number; status: string; step: string; message: string; target_count: number; completed_count: number; saved_count: number; model: string;
+  failover_events?: { id: number; time: string; text: string }[];
   items: { sequence: number; chapter_id: number | null; title: string; status: string }[] }
 const active = (job: Job | null) => !!job && ['queued', 'running', 'cancelling'].includes(job.status)
 const labels: Record<string, string> = { queued: '排队中', running: '生成中', cancelling: '正在停止', cancelled: '已停止', interrupted: '等待继续', failed: '需处理', completed: '已完成' }
@@ -165,6 +166,8 @@ function WritingTaskWindow({ bookId }: { bookId: number }) {
     } catch (exc) { if (alive.current) setError(String(exc)) }
     finally { sequence.current++; if (alive.current) setSending(false) }
   }
+  const visibleLog = [...log.entries, ...(job?.failover_events || []).map(event => ({ ...event, key: `failover:${event.id}` }))]
+    .sort((a, b) => b.time.localeCompare(a.time)).slice(0, 100)
   if (!open) return null
   return createPortal(<section ref={panel} role="region" aria-label="持续生成正文浮窗"
     style={position ? { left: position.x, top: position.y } : { right: 20, bottom: 20 }}
@@ -220,9 +223,9 @@ function WritingTaskWindow({ bookId }: { bookId: number }) {
       </div>
     </section>}
     {job && log.jobId === job.id && <section aria-label="步骤日志" className="border-t border-line-soft pt-3">
-      <div className="mb-2 flex items-center justify-between"><h3 className="text-meta font-semibold">步骤日志</h3><MetaText>本窗口观测 · 最近 100 条</MetaText></div>
+      <div className="mb-2 flex items-center justify-between"><h3 className="text-meta font-semibold">步骤日志</h3><MetaText>步骤与模型切换 · 最近 100 条</MetaText></div>
       <ol className="max-h-36 space-y-2 overflow-y-auto text-meta" aria-label="任务日志记录">
-        {[...log.entries].reverse().map((entry, index) => <li key={`${entry.time}:${index}`} className="flex gap-2">
+        {visibleLog.map((entry, index) => <li key={`${entry.time}:${index}`} className="flex gap-2">
           <time className="shrink-0 tabular-nums text-ink-faint" dateTime={entry.time}>{new Date(entry.time).toLocaleTimeString('zh-CN', { hour12: false })}</time>
           <span className="break-words text-ink-soft">{entry.text}</span>
         </li>)}

@@ -149,7 +149,7 @@ function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
           </Field>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Field label="Temperature"><Input type="number" step="0.1" min="0" max="2" value={form.temperature} onChange={event => setForm({ ...form, temperature: Number(event.target.value) })} /></Field>
-            <Field label="最大输出 Tokens"><Input type="number" min={100} value={form.max_tokens} onChange={event => setForm({ ...form, max_tokens: Number(event.target.value) })} /></Field>
+            <Field label="最大输出 Tokens" hint="仅限制模型回复长度，不是输入上下文容量。需低于该模型的输出上限。"><Input type="number" min={100} value={form.max_tokens} onChange={event => setForm({ ...form, max_tokens: Number(event.target.value) })} /></Field>
             <Field label="生成等待（分钟）" hint={`保存值 ${form.timeout} 秒；默认 30 分钟，可继续调大。`}><Input type="number" min={0.1} step={0.1} value={Number((form.timeout / 60).toFixed(3))} onChange={event => setForm({ ...form, timeout: Math.round(Number(event.target.value) * 60) })} /></Field>
           </div>
           <label className="flex items-center gap-2 text-body text-ink-soft">

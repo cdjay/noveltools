@@ -129,7 +129,7 @@ export function CurrentStatePage() {
     <div className="my-4 rounded-md border border-line-soft bg-paper-raised px-4 py-3 text-meta leading-6 text-ink-soft">
       <div>正文范围：{context?.body_chapters.map(c => `第 ${c.chapter_number} 章`).join('、') || '暂无章节'} · 梗概 {context?.summary_count || 0} / {context?.chapter_count || 0} 章 · 输入约 {context?.input_characters.toLocaleString() || 0} 字符</div>
       <div>大纲：{context?.outline ? `已纳入 v${context.outline.version_number} 全文 · ${context.outline.characters.toLocaleString()} 字符${context.outline.is_empty ? "（内容为空）" : ""}` : "尚未保存，将按现有正文与梗概整理"}。大纲中的未来剧情仅作规划参考。</div>
-      <div>模型：{context?.model || '尚未配置，请到 LLM 配置设置默认或分流模型'}。按当前章节顺序选取；输入完整发送，不自动截断。</div>
+      <div>主模型：{context?.model || '尚未配置，请到 LLM 配置设置默认或分流模型'}。按当前章节顺序选取；输入完整发送，不自动截断。</div>
       {!!context?.max_output_tokens && <div>最大输出：{context.max_output_tokens.toLocaleString()} Tokens（在 LLM 配置修改）。这是生成结果的上限，不是输入容量；上面的输入字符数也不等于 Token 数。</div>}
       {!!context?.timeout_seconds && <div>等待模型响应：{Number((context.timeout_seconds / 60).toFixed(1))} 分钟，可在 LLM 配置延长；修改后用于下一次请求。</div>}
       {!!context?.missing_summary_chapter_ids.length && <div>有 {context.missing_summary_chapter_ids.length} 章尚无梗概，将标明资料缺失。</div>}

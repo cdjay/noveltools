@@ -7,6 +7,12 @@ test('模块分流可保存、刷新、保留分页草稿并提示配置失效',
   const model = await (await request.post(`${api}/llm/providers`, { data: {
     provider_name: '整理专用', model: 'test-routing', base_url: 'https://routing.invalid/v1', api_key: 'test-only', enabled: false,
   } })).json()
+  const backup = await (await request.post(`${api}/llm/providers`, { data: {
+    provider_name: '额度备用', model: 'backup-routing', base_url: 'https://backup.invalid/v1', api_key: 'backup-test', enabled: false,
+  } })).json()
+  const backup2 = await (await request.post(`${api}/llm/providers`, { data: {
+    provider_name: '第二备用', model: 'backup-two', base_url: 'https://backup-two.invalid/v1', api_key: 'backup-two-test', enabled: false,
+  } })).json()
   try {
     await page.goto(`/books/${book.id}/settings`)
     await page.getByRole('tab', { name: '模块分流', exact: true }).click()
@@ -15,9 +21,17 @@ test('模块分流可保存、刷新、保留分页草稿并提示配置失效',
     await expect(summary).toBeVisible()
     await expect(page.getByRole('combobox', { name: '批量梗概使用的模型', exact: true })).toBeVisible()
     await summary.selectOption(String(model.id))
+    const standby = page.getByRole('combobox', { name: '单章梗概备用模型 1', exact: true })
+    const standby2 = page.getByRole('combobox', { name: '单章梗概备用模型 2', exact: true })
+    await expect(standby).toHaveValue('')
+    await expect(standby2).toBeDisabled()
+    await standby.selectOption(String(backup.id))
+    await standby2.selectOption(String(backup2.id))
     await page.getByRole('tab', { name: '模型列表', exact: true }).click()
     await page.getByRole('tab', { name: '模块分流', exact: true }).click()
     await expect(summary).toHaveValue(String(model.id))
+    await expect(standby).toHaveValue(String(backup.id))
+    await expect(standby2).toHaveValue(String(backup2.id))
     await page.getByRole('button', { name: '保存单章梗概分流', exact: true }).click()
     await expect(page.getByRole('button', { name: '保存单章梗概分流', exact: true })).toBeDisabled()
     await state.selectOption(String(model.id))
@@ -26,7 +40,11 @@ test('模块分流可保存、刷新、保留分页草稿并提示配置失效',
     await page.reload()
     await page.getByRole('tab', { name: '模块分流', exact: true }).click()
     await expect(summary).toHaveValue(String(model.id))
+    await expect(standby).toHaveValue(String(backup.id))
+    await expect(standby2).toHaveValue(String(backup2.id))
     await expect(state).toHaveValue(String(model.id))
+    await expect(page.getByRole('combobox', { name: '当前状态速查备用模型 1', exact: true })).toHaveValue('')
+    await expect(page.getByRole('combobox', { name: '正文生成备用模型 1', exact: true })).toHaveValue('')
     await page.screenshot({ path: testInfo.outputPath('llm-routing.png'), fullPage: true })
     // Another window updates this row; saving the old baseline must retain the draft.
     const rows = await (await request.get(`${api}/llm/routes`)).json()
@@ -44,12 +62,16 @@ test('模块分流可保存、刷新、保留分页草稿并提示配置失效',
     await expect(summary).toHaveValue('missing')
     await expect(page.getByText('单章梗概指定的模型已删除或未设置密钥', { exact: false })).toBeVisible()
     await summary.selectOption('')
+    await standby.selectOption('')
+    await expect(standby2).toHaveValue('')
     await page.getByRole('button', { name: '保存单章梗概分流', exact: true }).click()
     await expect(page.getByRole('button', { name: '保存单章梗概分流', exact: true })).toBeDisabled()
   } finally {
     const rows = await (await request.get(`${api}/llm/routes`)).json()
-    for (const row of rows) await request.put(`${api}/llm/routes/${row.module}`, { data: { provider_id: null, base_revision: row.revision } })
+    for (const row of rows) await request.put(`${api}/llm/routes/${row.module}`, { data: { provider_id: null, fallback_provider_ids: [], base_revision: row.revision } })
     await request.delete(`${api}/llm/providers/${model.id}`)
+    await request.delete(`${api}/llm/providers/${backup.id}`)
+    await request.delete(`${api}/llm/providers/${backup2.id}`)
     await request.delete(`${api}/books/${book.id}`)
   }
 })

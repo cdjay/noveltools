@@ -42,7 +42,7 @@ export function SummaryTaskPanel({ bookId, disabled, onBusy, onProgress }: { boo
   return <div className="space-y-2">
     <Button variant="ghost" size="sm" className="w-full" disabled={disabled || sending || active(job)} onClick={() => void act(`/books/${bookId}/summary-jobs`)}>批量更新章节梗概</Button>
     {job && <div className="rounded border border-line-soft p-2 text-meta" aria-label="批量梗概任务">
-      <div>{labels[job.status] || job.status} · {job.model}</div>
+      <div>{labels[job.status] || job.status} · 主模型：{job.model}</div>
       <progress className="mt-1 w-full accent-accent-600" max={Math.max(job.total, 1)} value={job.updated + job.skipped + job.failed} aria-label="梗概任务进度" />
       <MetaText>梗概更新：成功 {job.updated} 章，跳过 {job.skipped} 章，失败 {job.failed} 章</MetaText>
       {active(job)

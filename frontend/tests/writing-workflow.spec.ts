@@ -116,8 +116,9 @@ test('正文工具栏选择章数、启动、停止、继续和刷新任务，�
     await expect(page.getByText('正文已保存 1/3 章', { exact: false })).toBeVisible()
     await expect(start).toBeDisabled()
     await expect(page.getByRole('region', { name: '步骤日志', exact: true })).toContainText('正在补齐梗概')
-    job = { ...job, status: 'failed', message: '模型接口返回 HTTP 502，请检查 LLM 配置。' }
+    job = { ...job, status: 'failed', message: '模型接口返回 HTTP 502，请检查 LLM 配置。', failover_events: [{ id: 10, time: new Date().toISOString(), text: '批量梗概：切换至备用模型 backup-test，发送相同提示词和资料。' }] }
     await expect(floating.getByRole('alert')).toContainText('HTTP 502')
+    await expect(page.getByRole('region', { name: '步骤日志', exact: true })).toContainText('backup-test')
     await expect(page.getByRole('button', { name: '继续生成', exact: true })).toBeEnabled()
     await expect(page.getByRole('region', { name: '步骤日志', exact: true })).toContainText('HTTP 502')
     await page.getByRole('button', { name: '收起生成浮窗' }).click()
