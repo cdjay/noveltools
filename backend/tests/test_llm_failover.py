@@ -112,16 +112,56 @@ def test_no_fallback_stops_and_never_borrows_another_modules_backup(monkeypatch)
 @pytest.mark.parametrize('response', [httpx.Response(400, json={'error': {'message': 'invalid temperature'}}),
     httpx.Response(401, json={'error': {'message': 'bad key'}}), httpx.Response(502, json={'error': {'message': 'gateway error'}}),
     httpx.Response(200, json={'choices': []})])
-def test_other_errors_do_not_switch_or_overwrite(monkeypatch, response):
+def test_failed_responses_exhaust_only_own_chain_without_overwrite(monkeypatch, response):
     main, backup = provider('k3', True), provider('backup')
     route('current_state', main, backup)
     calls = mock_http(monkeypatch, lambda p: response)
     bid, _ = book()
     previous = client.post(f'/api/books/{bid}/current-state/versions', json={'base_version_id': None, 'content': '已有速查'}).json()
     result = client.post(f'/api/books/{bid}/current-state/generate', json={'base_version_id': previous['id']})
-    assert result.status_code == 502
-    assert [c[0]['model'] for c in calls] == ['k3']
+    assert result.status_code == 503
+    assert [c[0]['model'] for c in calls] == ['k3', 'backup']
     assert client.get(f'/api/books/{bid}/current-state').json()['version']['id'] == previous['id']
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'connection', 'http400', 'http502', 'empty', 'invalid_json'])
+def test_state_backup_recovers_transport_and_format_errors_with_same_context(monkeypatch, failure):
+    main, backup = provider('k3', True), provider('backup')
+    route('current_state', main, backup)
+    def respond(payload):
+        if payload['model'] == 'backup':
+            return text_response('已核对正文的完整速查')
+        if failure == 'timeout':
+            raise httpx.ReadTimeout('secret request body')
+        if failure == 'connection':
+            raise httpx.ConnectError('secret endpoint')
+        if failure.startswith('http'):
+            return httpx.Response(int(failure[4:]), json={'error': {'message': 'secret upstream'}})
+        if failure == 'invalid_json':
+            return httpx.Response(200, text='not json')
+        return text_response('')
+    calls = mock_http(monkeypatch, respond)
+    bid, _ = book()
+    result = client.post(f'/api/books/{bid}/current-state/generate', json={'base_version_id': None})
+    assert result.status_code == 200, result.text
+    assert result.json()['model'] == 'backup'
+    assert [c[0]['model'] for c in calls] == ['k3', 'backup']
+    assert calls[0][0]['messages'] == calls[1][0]['messages']
+
+
+def test_prose_conflict_is_not_bypassed_even_with_explicit_backup():
+    from app.llm_failover import run_with_fallback, snapshot_chain
+    main, backup = provider('gemini-main', True), provider('backup')
+    route('chapter_writing', main, backup)
+    with SessionLocal() as db:
+        chain = snapshot_chain(db, 'chapter_writing')
+    called = []
+    async def conflict(selected):
+        called.append(selected.model)
+        raise ValueError('正文模型报告资料冲突')
+    with pytest.raises(ValueError, match='资料冲突'):
+        asyncio.run(run_with_fallback(chain, 'chapter_writing', conflict))
+    assert called == ['gemini-main']
 
 
 def test_all_backups_exhausted_stop_without_loop_or_write(monkeypatch):

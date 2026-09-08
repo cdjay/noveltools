@@ -135,13 +135,25 @@ async def run_with_fallback(saved, module, operation):
             if skipped:
                 log_event(module, f'{MODULES[module][0]}：备用模型 {provider.model} 返回成功。')
             return result, provider
-        except httpx.HTTPStatusError as exc:
-            reason = fallback_reason(exc.response)
+        except (httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+            response = exc.response if isinstance(exc, httpx.HTTPStatusError) else None
+            reason = fallback_reason(response) if response is not None else None
+            # Summaries/state may use their own backups for unavailable or invalid
+            # responses. Writing retains its stricter, explicitly configured policy;
+            # a prose conflict report must not be bypassed by another model.
+            quota_failure = bool(reason)
+            if not reason and module != 'chapter_writing':
+                if response is not None:
+                    reason = f'接口报错 HTTP {response.status_code}'
+                elif isinstance(exc, httpx.RequestError):
+                    reason = '连接中断或超时'
+                else:
+                    reason = '返回格式无法使用'
             if not bounded_failover or not reason:
                 raise
             with SessionLocal.begin() as db:
                 db.merge(LLMProviderCooldown(provider_id=provider.id, fingerprint=fingerprint(provider),
-                    until=cooldown_deadline(exc.response), reason=reason))
+                    until=cooldown_deadline(response) if quota_failure else datetime.utcnow() + timedelta(minutes=1), reason=reason))
             skipped.append(provider.model)
             log_event(module, f'{MODULES[module][0]}：{provider.model} 因{reason}暂时跳过；继续检查下一个备用模型。')
-    raise HTTPException(503, f'{MODULES[module][0]}的主模型和备用模型均受限或仍在冷却（{"、".join(skipped)}）。已有内容保留，请等待额度恢复或修改分流后继续。')
+    raise HTTPException(503, f'{MODULES[module][0]}的主模型和备用模型均受限、调用失败或仍在冷却（{"、".join(skipped)}）。已有内容保留，请等待服务或额度恢复，或修改本模块分流后继续。')
