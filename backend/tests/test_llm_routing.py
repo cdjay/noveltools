@@ -47,7 +47,9 @@ def test_all_generation_paths_use_their_assigned_models_and_batch_snapshot(monke
     default = provider('default', True)
     single, batch, state = provider('single'), provider('batch'), provider('state')
     routes = client.get('/api/llm/routes').json()
-    assert len(routes) == 3 and all(r['effective_provider']['id'] == default['id'] for r in routes)
+    assert len(routes) == 4
+    assert all(r['effective_provider']['id'] == default['id'] for r in routes if r['module'] != 'chapter_writing')
+    assert next(r for r in routes if r['module'] == 'chapter_writing')['effective_provider'] is None
     for module, model in [('chapter_summary', single), ('batch_summary', batch), ('current_state', state)]:
         assert assign(module, model).status_code == 200
     assert 'secret-' not in client.get('/api/llm/routes').text

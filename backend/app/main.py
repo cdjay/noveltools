@@ -15,6 +15,7 @@ from .routers.current_state import router as current_state_router
 from .routers.materials import router as materials_router
 from .routers.llm_routes import router as llm_routes_router
 from .routers.llm_provider_actions import router as llm_provider_actions_router
+from .routers import writing_jobs
 
 Base.metadata.create_all(bind=engine)
 ensure_schema()
@@ -23,9 +24,14 @@ migrate_legacy_outlines()
 @asynccontextmanager
 async def lifespan(app):
     recover_interrupted()
+    writing_jobs.recover_interrupted()
     task = asyncio.create_task(worker())
+    writing_task = asyncio.create_task(writing_jobs.worker())
     yield
+    writing_task.cancel()
     task.cancel()
+    with suppress(asyncio.CancelledError):
+        await writing_task
     with suppress(asyncio.CancelledError):
         await task
 
@@ -41,3 +47,4 @@ app.include_router(current_state_router)
 app.include_router(materials_router)
 app.include_router(llm_routes_router)
 app.include_router(llm_provider_actions_router)
+app.include_router(writing_jobs.router)

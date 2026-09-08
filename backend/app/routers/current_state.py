@@ -292,9 +292,13 @@ async def call_model(provider, prompt, context):
 
 @router.post("/generate", response_model=StateVersionOut)
 async def generate(book_id: int, payload: StateBase, db: Session = Depends(get_db)):
+    return await generate_state(book_id, payload, db)
+
+
+async def generate_state(book_id: int, payload: StateBase, db: Session, provider_override=None):
     lock_book(db, book_id)
     check_base(db, book_id, payload.base_version_id)
-    provider = summary_provider(db, "current_state")
+    provider = provider_override if provider_override is not None else summary_provider(db, "current_state")
     if not provider:
         raise HTTPException(400, "请在 LLM 配置中设置可用的默认模型或当前状态速查分流。")
     manifest, context = snapshot(db, book_id)

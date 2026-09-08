@@ -22,7 +22,7 @@ def route_out(db, module):
     try:
         provider = resolve_provider(db, module)
         if not provider:
-            error = "尚未设置可用的默认模型"
+            error = "请保存 Gemini 配置，或为正文生成指定模型" if module == "chapter_writing" else "尚未设置可用的默认模型"
     except HTTPException as exc:
         provider, error = None, exc.detail
     return {"module": module, "label": MODULES[module][0], "description": MODULES[module][1],

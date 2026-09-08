@@ -63,6 +63,31 @@ class ChapterVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class WritingJob(Base):
+    __tablename__ = "writing_jobs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    target_count: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="queued")
+    step: Mapped[str] = mapped_column(String(40), default="preparing")
+    message: Mapped[str] = mapped_column(Text, default="")
+    providers: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class WritingJobItem(Base):
+    __tablename__ = "writing_job_items"
+    __table_args__ = (UniqueConstraint("job_id", "sequence"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("writing_jobs.id", ondelete="CASCADE"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True)
+    version_id: Mapped[int | None] = mapped_column(ForeignKey("chapter_versions.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+
+
 class SummaryJob(Base):
     __tablename__ = "summary_jobs"
     id: Mapped[int] = mapped_column(primary_key=True)
