@@ -40,8 +40,9 @@ function ModelSettings() {
   const [testing, setTesting] = useState(false)
   const [models, setModels] = useState<string[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
+  const dirty = JSON.stringify(form) !== JSON.stringify(selected ? formFromProvider(selected) : defaultForm)
   const fetchModels = async () => {
-    if (!selected) return
+    if (!selected || dirty || saving) return
     setFetchingModels(true); setError('')
     try { setModels(await api<string[]>(`/llm/providers/${selected.id}/models`)) }
     catch (exc) { setError(String(exc)) }
@@ -80,7 +81,7 @@ function ModelSettings() {
     } catch (exc) { setError(exc instanceof Error ? exc.message : '保存配置失败') } finally { setSaving(false) }
   }
   const test = async () => {
-    if (!selected) return
+    if (!selected || dirty || saving) return
     setError(''); setTesting(true)
     try {
       const result = await api<{ ok: boolean; message: string }>(`/llm/providers/${selected.id}/test`, { method: 'POST' })
@@ -113,22 +114,25 @@ function ModelSettings() {
             <Field label="模型名" hint="按服务模型列表填写完整 ID，注意大小写。"><Input list="provider-model-ids" value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></Field>
           </div>
           <datalist id="provider-model-ids">{models.map(model => <option key={model} value={model} />)}</datalist>
-          <div className="flex items-center gap-2"><Button size="sm" variant="secondary" disabled={!selected || fetchingModels} onClick={() => void fetchModels()}>{fetchingModels ? '读取中…' : '读取可用模型'}</Button><MetaText>{models.length ? `已读取 ${models.length} 个模型，请在模型名中选择。` : '读取使用已保存的地址与密钥。'}</MetaText></div>
+          <div className="flex items-center gap-2"><Button size="sm" variant="secondary" disabled={!selected || fetchingModels || dirty || saving} onClick={() => void fetchModels()}>{fetchingModels ? '读取中…' : '读取可用模型'}</Button><MetaText>{models.length ? `已读取 ${models.length} 个模型，请在模型名中选择。` : '读取使用已保存的地址与密钥。'}</MetaText></div>
           <Field label="Base URL"><Input value={form.base_url} onChange={event => setForm({ ...form, base_url: event.target.value })} /></Field>
           <Field label="API Key" hint={selected?.has_api_key ? '已设置，留空表示保留原值。' : '密钥只写入本地数据库，不会在前端回显。'}>
             <Input type="password" value={form.api_key} onChange={event => setForm({ ...form, api_key: event.target.value })} placeholder={selected?.has_api_key ? '留空保留原值' : 'sk-…'} />
           </Field>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Field label="Temperature"><Input type="number" step="0.1" min="0" max="2" value={form.temperature} onChange={event => setForm({ ...form, temperature: Number(event.target.value) })} /></Field>
-            <Field label="最大 Tokens"><Input type="number" min={100} value={form.max_tokens} onChange={event => setForm({ ...form, max_tokens: Number(event.target.value) })} /></Field>
+            <Field label="最大输出 Tokens"><Input type="number" min={100} value={form.max_tokens} onChange={event => setForm({ ...form, max_tokens: Number(event.target.value) })} /></Field>
             <Field label="超时（秒）"><Input type="number" min={5} value={form.timeout} onChange={event => setForm({ ...form, timeout: Number(event.target.value) })} /></Field>
           </div>
           <label className="flex items-center gap-2 text-body text-ink-soft">
             <input type="checkbox" className="accent-accent-600" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} />启用此配置
           </label>
+          <p className="text-meta text-ink-soft">最大输出 Tokens 控制生成结果长度，不是模型输入容量。连接测试只发送短句、最多输出 10 Tokens；测试成功不代表长文本生成或持续调用一定可用。</p>
+          {dirty && <MetaText>配置有未保存修改，请先保存，再测试连接或读取模型。</MetaText>}
+          {selected && !selected.enabled && <MetaText>此配置当前停用。连接测试成功不会自动启用；生成使用顶部显示的当前模型。</MetaText>}
           <div className="flex flex-wrap gap-2 border-t border-line-soft pt-4">
             <Button variant="primary" disabled={saving} onClick={() => void save()}>{saving ? '保存中…' : '保存配置'}</Button>
-            <Button variant="secondary" disabled={!selected || testing} onClick={() => void test()}><PlugZap size={14} />{testing ? '测试中…' : '测试连接'}</Button>
+            <Button variant="secondary" disabled={!selected || testing || dirty || saving} onClick={() => void test()}><PlugZap size={14} />{testing ? '测试中…' : '测试连接'}</Button>
             {selected && <><Button variant="ghost" disabled={saving || !selected.has_api_key} onClick={() => void remove(true)}>清除密钥</Button><Button variant="danger" disabled={saving} onClick={() => void remove(false)}>删除配置</Button></>}
           </div>
         </div>
@@ -139,7 +143,7 @@ function ModelSettings() {
 
 export function SettingsPage() {
   return <div className="p-6">
-    <PageHeader title="LLM 配置" description="配置全局共用，用于手动生成章节梗概与连接测试。正文与大纲保存不会自动调用模型。" />
+    <PageHeader title="LLM 配置" description="配置全局共用，用于生成章节梗概、当前状态速查与连接测试。正文与大纲保存不会自动调用模型。" />
     <div className="mt-5"><ModelSettings /></div>
   </div>
 }

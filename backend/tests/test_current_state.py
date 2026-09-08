@@ -12,6 +12,24 @@ from app.routers import current_state
 client = TestClient(app)
 
 
+def test_rate_limit_explains_wait_and_preserves_state(monkeypatch):
+    _, _, url = setup_book(1)
+    saved = client.post(url + '/versions', json={'content': '已有速查', 'base_version_id': None}).json()
+    original = httpx.AsyncClient
+    calls = []
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429, headers={'Retry-After': '30'}, json={
+            'error': {'type': 'rate_limit_exceeded', 'message': 'Too many requests'}})
+    monkeypatch.setattr(current_state.httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(respond)))
+    result = client.post(url + '/generate', json={'base_version_id': saved['id']})
+    assert '限流' in result.json()['detail'], result.text
+    assert '30' in result.json()['detail']
+    assert len(calls) == 1
+    assert client.get(url).json()['version']['id'] == saved['id']
+    assert not client.get(url).json()['generating']
+
+
 def setup_book(count=7):
     with SessionLocal.begin() as db:
         db.execute(delete(LLMProvider))
@@ -55,6 +73,7 @@ def test_exact_llm_context_prompt_and_read_interfaces(monkeypatch):
     assert 'api_key' not in client.get(url).text
     assert client.get(f"/api/books/{other['id']}/current-state/versions/{state['id']}").status_code == 404
     assert client.get(url + '/context').json()['summary_count'] == 7
+    assert client.get(url + '/context').json()['max_output_tokens'] == captured[0]['max_tokens']
     assert client.put(url + '/settings', json={'prompt': 'stale', 'base_revision': 0}).status_code == 409
     # Even an older chapter's summary change invalidates the state sheet.
     with SessionLocal.begin() as db:

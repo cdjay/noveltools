@@ -1,5 +1,28 @@
 import { test, expect } from '@playwright/test'
 
+test('较晚返回的大纲读取不能清空已经输入的草稿', async ({ page, request }) => {
+  const base = 'http://127.0.0.1:19518/api'
+  const book = await (await request.post(`${base}/books`, { data: { title: '大纲读取顺序验收' } })).json()
+  let release!: () => void
+  let finished!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const lateResponse = new Promise<void>(resolve => { finished = resolve })
+  let calls = 0
+  await page.route(`**/books/${book.id}/outline/versions`, async route => {
+    if (++calls === 1) { await gate; await route.fulfill({ json: [] }); finished() }
+    else await route.fulfill({ json: [] })
+  })
+  try {
+    await page.goto(`/books/${book.id}/outline`)
+    const editor = page.getByRole('textbox', { name: '大纲全文', exact: true })
+    await editor.fill('刚写的新大纲，不能被迟到的读取覆盖。')
+    release()
+    await lateResponse
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await expect(editor).toHaveValue('刚写的新大纲，不能被迟到的读取覆盖。')
+  } finally { release(); await request.delete(`${base}/books/${book.id}`) }
+})
+
 const api = 'http://127.0.0.1:19518/api'
 
 test('工作入口包含独立速查页，大纲全文可保存、查看历史与恢复', async ({ page, request }, testInfo) => {

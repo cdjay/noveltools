@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { History, RotateCcw, Save } from 'lucide-react'
 import { api } from '../api/client'
 import { useAppStore } from '../stores/useAppStore'
@@ -17,19 +17,23 @@ export function OutlinePage() {
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<OutlineVersion | null>(null)
   const [restoring, setRestoring] = useState<OutlineVersion | null>(null)
+  const loadSequence = useRef(0)
   const latest = versions[0]
   const dirty = content !== (latest?.content || '')
   useUnsavedChanges(dirty)
 
   const load = async () => {
     if (!currentBook) return
-    setLoading(true); setError('')
+    const sequence = ++loadSequence.current
+    setLoading(true); setLoaded(false); setError('')
     try {
       const data = await api<OutlineVersion[]>(`/books/${currentBook.id}/outline/versions`)
+      if (sequence !== loadSequence.current) return
       setVersions(data); setContent(data[0]?.content || ''); setLoaded(true)
-    } catch (exc) { setError(String(exc)) } finally { setLoading(false) }
+    } catch (exc) { if (sequence === loadSequence.current) setError(String(exc)) }
+    finally { if (sequence === loadSequence.current) setLoading(false) }
   }
-  useEffect(() => { void load() }, [currentBook?.id])
+  useEffect(() => { void load(); return () => { loadSequence.current++ } }, [currentBook?.id])
 
   const save = async (restore?: OutlineVersion) => {
     if (!currentBook || busy) return

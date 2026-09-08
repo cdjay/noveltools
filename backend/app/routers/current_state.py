@@ -192,12 +192,14 @@ def get_context(book_id: int, db: Session = Depends(get_db)):
             raise
         return {"body_chapters": [], "chapter_count": 0, "summary_count": 0,
                 "missing_summary_chapter_ids": [], "stale_summary_chapter_ids": [], "input_characters": 0,
-                "model": provider.model if provider else None, "source_error": str(exc.detail)}
+                "model": provider.model if provider else None, "max_output_tokens": provider.max_tokens if provider else None,
+                "source_error": str(exc.detail)}
     return {"body_chapters": [{k: value for k, value in c.items() if k != "content"} for c in context["recent_chapters"]],
             "chapter_count": len(manifest["chapters"]), "summary_count": len(context["all_summaries"]),
             "missing_summary_chapter_ids": manifest["missing_summary_chapter_ids"],
             "stale_summary_chapter_ids": manifest["stale_summary_chapter_ids"],
-            "input_characters": len(json.dumps(context, ensure_ascii=False)), "model": provider.model if provider else None}
+            "input_characters": len(json.dumps(context, ensure_ascii=False)), "model": provider.model if provider else None,
+            "max_output_tokens": provider.max_tokens if provider else None}
 
 
 @router.get("/export.md")

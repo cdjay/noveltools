@@ -2,6 +2,29 @@ import { test, expect } from '@playwright/test'
 
 const api = 'http://127.0.0.1:19518/api'
 
+test('速查限流显示可读原因并保留已有版本', async ({ page, request }) => {
+  const book = await (await request.post(`${api}/books`, { data: { title: '速查限流验收' } })).json()
+  const base = `${api}/books/${book.id}/current-state`
+  try {
+    await request.post(`${api}/books/${book.id}/chapters`, { data: { content: '测试正文' } })
+    const saved = await (await request.post(base + '/versions', { data: { content: '已有状态内容', base_version_id: null } })).json()
+    await page.goto(`/books/${book.id}/current-state`)
+    let calls = 0
+    const message = '模型服务并发限流（HTTP 429）。请等待约 30 秒后重试。'
+    await page.route(`**/books/${book.id}/current-state/generate`, route => {
+      calls++
+      return route.fulfill({ status: 502, json: { detail: message } })
+    })
+    const generate = page.getByRole('button', { name: '生成当前状态速查', exact: true })
+    await generate.click()
+    await expect(page.getByText(message, { exact: true })).toBeVisible()
+    await expect(generate).toBeEnabled()
+    await expect(page.getByText('当前 v1', { exact: true })).toBeVisible()
+    expect(calls).toBe(1)
+    expect((await (await request.get(base)).json()).version.id).toBe(saved.id)
+  } finally { await request.delete(`${api}/books/${book.id}`) }
+})
+
 test('独立速查页可生成、编辑提示词、保存历史并提供提取地址', async ({ page, request }, testInfo) => {
   const book = await (await request.post(`${api}/books`, { data: { title: '状态速查界面验收' } })).json()
   const chapters = []
