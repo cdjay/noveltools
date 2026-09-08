@@ -79,3 +79,25 @@ test('独立速查页可生成、编辑提示词、保存历史并提供提取�
     await expect(prompt).toHaveValue('请用 Markdown 整理当前进度、人物状态与伏笔，未知信息标为待核实。')
   } finally { await request.delete(`${api}/books/${book.id}`) }
 })
+
+
+test('本书写作规则选择保存后显示来源并在重新进入时保留', async ({ page, request }) => {
+  const book = await (await request.post(`${api}/books`, { data: { title: '规则选择验收' } })).json()
+  const base = `${api}/books/${book.id}/current-state`
+  try {
+    await request.post(`${api}/books/${book.id}/chapters`, { data: { content: '正文' } })
+    const rule = await (await request.post(`${api}/books/${book.id}/materials`, { data: { title: 'AI写作禁令skill', content: '作者禁令' } })).json()
+    await page.goto(`/books/${book.id}/current-state`)
+    await page.getByRole('button', { name: '页面设置' }).click()
+    const checkbox = page.getByRole('checkbox', { name: 'AI写作禁令skill · v1' })
+    await checkbox.check()
+    await page.getByRole('button', { name: '保存提示词', exact: true }).click()
+    await expect(page.getByRole('button', { name: '保存提示词', exact: true })).toBeDisabled()
+    expect((await (await request.get(base + '/settings')).json()).writing_rule_keys).toEqual([rule.material_key])
+    await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click()
+    await expect(page.getByText('写作规则：AI写作禁令skill v1', { exact: false })).toBeVisible()
+    await page.reload()
+    await page.getByRole('button', { name: '页面设置' }).click()
+    await expect(checkbox).toBeChecked()
+  } finally { await request.delete(`${api}/books/${book.id}`) }
+})

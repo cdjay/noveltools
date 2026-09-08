@@ -10,8 +10,8 @@ import { Badge, Button, ConfirmModal, Empty, InlineError, Loading, MetaText, Mod
 
 type StateVersion = { id: number; book_id: number; version_number: number; content: string; source: string; note: string; model: string; prompt: string; created_at: string; source_manifest: { body_chapter_ids?: number[]; chapters?: { chapter_number: number; title: string }[] } }
 type CurrentState = { book_id: number; version: StateVersion | null; is_stale: boolean; generating: boolean }
-type StateSettings = { prompt: string; revision: number; default_prompt: string }
-type SourceContext = { outline?: { version_number: number; characters: number; is_empty: boolean } | null; body_chapters: { chapter_id: number; chapter_number: number; title: string }[]; chapter_count: number; summary_count: number; missing_summary_chapter_ids: number[]; stale_summary_chapter_ids: number[]; input_characters: number; model: string | null; max_output_tokens?: number | null; timeout_seconds?: number | null; source_error?: string; provider_error?: string }
+type StateSettings = { prompt: string; revision: number; default_prompt: string; writing_rule_keys?: string[]; available_rules?: { material_key: string; title: string; version_number: number; is_empty: boolean }[] }
+type SourceContext = { writing_rules?: { material_key: string; title: string; version_number: number }[]; outline?: { version_number: number; characters: number; is_empty: boolean } | null; body_chapters: { chapter_id: number; chapter_number: number; title: string }[]; chapter_count: number; summary_count: number; missing_summary_chapter_ids: number[]; stale_summary_chapter_ids: number[]; input_characters: number; model: string | null; max_output_tokens?: number | null; timeout_seconds?: number | null; source_error?: string; provider_error?: string }
 
 export function CurrentStatePage() {
   const bookId = useAppStore(state => state.currentBook?.id)
@@ -22,6 +22,7 @@ export function CurrentStatePage() {
   const [settings, setSettings] = useState<StateSettings | null>(null)
   const [content, setContent] = useState('')
   const [prompt, setPrompt] = useState('')
+  const [ruleKeys, setRuleKeys] = useState<string[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [preview, setPreview] = useState<StateVersion | null>(null)
   const [restoring, setRestoring] = useState<StateVersion | null>(null)
@@ -34,7 +35,7 @@ export function CurrentStatePage() {
   const loadSequence = useRef(0)
   const base = `/books/${bookId}/current-state`
   const dirty = !!current && content !== (current.version?.content || '')
-  const promptDirty = !!settings && prompt !== settings.prompt
+  const promptDirty = !!settings && (prompt !== settings.prompt || JSON.stringify(ruleKeys) !== JSON.stringify(settings.writing_rule_keys || []))
   useUnsavedChanges(dirty || promptDirty || generating)
 
   const load = async () => {
@@ -47,7 +48,7 @@ export function CurrentStatePage() {
       ])
       if (!alive.current || sequence !== loadSequence.current) return
       setCurrent(state); setContent(state.version?.content || ''); setVersions(history)
-      setSettings(config); setPrompt(config.prompt); setContext(sources)
+      setSettings(config); setPrompt(config.prompt); setRuleKeys(config.writing_rule_keys || []); setContext(sources)
       if (sources.source_error || sources.provider_error) setError(sources.source_error || sources.provider_error || '')
     } catch (exc) { if (alive.current && sequence === loadSequence.current) setError(String(exc)) }
     finally { if (alive.current && sequence === loadSequence.current) setLoading(false) }
@@ -103,15 +104,17 @@ export function CurrentStatePage() {
     if (!settings || busy) return
     setBusy(true); setSettingsError('')
     try {
-      const saved = await api<StateSettings>(`${base}/settings`, { method: 'PUT', body: JSON.stringify({ prompt, base_revision: settings.revision }) })
+      const saved = await api<StateSettings>(`${base}/settings`, { method: 'PUT', body: JSON.stringify({ prompt, writing_rule_keys: ruleKeys, base_revision: settings.revision }) })
       if (!alive.current) return
-      setSettings(saved); setPrompt(saved.prompt); toast('本书提示词已保存')
+      setSettings(saved); setPrompt(saved.prompt); setRuleKeys(saved.writing_rule_keys || []); toast('本书提示词与写作规则已保存')
+      const [fresh, sources] = await Promise.all([api<CurrentState>(base), api<SourceContext>(`${base}/context`)])
+      if (alive.current) { setCurrent(fresh); setContext(sources) }
     } catch (exc) { if (alive.current) setSettingsError(String(exc)) }
     finally { if (alive.current) setBusy(false) }
   }
   const closeSettings = () => {
     if (busy || (promptDirty && !window.confirm('放弃未保存的提示词修改？'))) return
-    setPrompt(settings?.prompt || ''); setSettingsOpen(false); setSettingsError('')
+    setPrompt(settings?.prompt || ''); setRuleKeys(settings?.writing_rule_keys || []); setSettingsOpen(false); setSettingsError('')
   }
   const inspect = async (version: StateVersion) => {
     try { const result = await api<StateVersion>(`${base}/versions/${version.id}`); if (alive.current) setPreview(result) }
@@ -120,7 +123,7 @@ export function CurrentStatePage() {
   const running = generating || !!current?.generating
   if (loading) return <Loading text="正在读取当前状态速查…" />
   return <div className="mx-auto max-w-7xl p-5 lg:p-7">
-    <PageHeader title="当前状态速查" description="按本书最新已保存大纲全文、最后 5 章正文与全部已有章节梗概整理，生成后自动保存历史，可继续手动编辑。" actions={<>
+    <PageHeader title="当前状态速查" description="按本书最新已保存大纲全文、最后 5 章正文、全部已有章节梗概与选定写作规则整理，生成后自动保存历史，可继续手动编辑。" actions={<>
       <Button variant="ghost" disabled={busy || running} onClick={() => setSettingsOpen(true)}><Settings2 size={14} />页面设置</Button>
       <Button variant="secondary" disabled={!current || busy || running || !dirty} onClick={() => void save()}><Save size={14} />保存修改</Button>
       <Button variant="primary" disabled={!current || busy || running || dirty || promptDirty || !context?.body_chapters.length} title={dirty ? '请先保存或放弃速查修改' : '使用已保存提示词与速查分流模型生成'} onClick={() => void generate()}><Sparkles size={14} />{running ? '正在生成…' : '生成当前状态速查'}</Button>
@@ -129,6 +132,7 @@ export function CurrentStatePage() {
     <div className="my-4 rounded-md border border-line-soft bg-paper-raised px-4 py-3 text-meta leading-6 text-ink-soft">
       <div>正文范围：{context?.body_chapters.map(c => `第 ${c.chapter_number} 章`).join('、') || '暂无章节'} · 梗概 {context?.summary_count || 0} / {context?.chapter_count || 0} 章 · 输入约 {context?.input_characters.toLocaleString() || 0} 字符</div>
       <div>大纲：{context?.outline ? `已纳入 v${context.outline.version_number} 全文 · ${context.outline.characters.toLocaleString()} 字符${context.outline.is_empty ? "（内容为空）" : ""}` : "尚未保存，将按现有正文与梗概整理"}。大纲中的未来剧情仅作规划参考。</div>
+      <div>写作规则：{context?.writing_rules?.map(rule => `${rule.title} v${rule.version_number}`).join('、') || '尚未选择，可在页面设置中选择本书资料'}。正文生成也会完整使用这些规则。</div>
       <div>主模型：{context?.model || '尚未配置，请到 LLM 配置设置默认或分流模型'}。按当前章节顺序选取；输入完整发送，不自动截断。</div>
       {!!context?.max_output_tokens && <div>最大输出：{context.max_output_tokens.toLocaleString()} Tokens（在 LLM 配置修改）。这是生成结果的上限，不是输入容量；上面的输入字符数也不等于 Token 数。</div>}
       {!!context?.timeout_seconds && <div>等待模型响应：{Number((context.timeout_seconds / 60).toFixed(1))} 分钟，可在 LLM 配置延长；修改后用于下一次请求。</div>}
@@ -168,8 +172,17 @@ export function CurrentStatePage() {
     </div>
     <Modal open={settingsOpen} onClose={closeSettings} title="当前状态速查 · 页面设置" description="提示词仅影响本书，保存后用于下一次生成。模型按模块分流选择，超时使用所选模型配置。" width="max-w-4xl" footer={<><Button variant="ghost" disabled={busy} onClick={() => { setPrompt(settings?.default_prompt || ''); setSettingsError('') }}>填入默认提示词</Button><Button variant="primary" disabled={busy || !prompt.trim() || !promptDirty} onClick={() => void saveSettings()}>保存提示词</Button></>}>
       {settingsError && <InlineError message={settingsError} />}
+      <fieldset className="mb-4 space-y-2 rounded border border-line-soft p-3">
+        <legend className="px-1 text-body">用于速查与正文的写作规则</legend>
+        <MetaText>仅选中作者规则或写作禁令；每次使用所选资料的最新保存版本。普通剧情资料不会自动加入。</MetaText>
+        {settings?.available_rules?.map(rule => <label key={rule.material_key} className="flex items-center gap-2 text-meta">
+          <input type="checkbox" disabled={busy || rule.is_empty} checked={ruleKeys.includes(rule.material_key)} onChange={event => setRuleKeys(keys => event.target.checked ? [...keys, rule.material_key] : keys.filter(key => key !== rule.material_key))} />
+          {rule.title} · v{rule.version_number}{rule.is_empty ? '（内容为空）' : ''}
+        </label>)}
+        {!settings?.available_rules?.length && <MetaText>请先在书籍资料库保存写作规则。</MetaText>}
+      </fieldset>
       <Textarea aria-label="当前状态速查提示词" rows={18} value={prompt} disabled={busy} onChange={event => setPrompt(event.target.value)} />
-      <MetaText className="mt-3">最新已保存大纲全文、最后五章正文与全部已有梗概由系统另行发送，无需在提示词中粘贴。修改提示词不会改变固定的取材范围；系统会附加大纲规划与已发生事实的区分说明。</MetaText>
+      <MetaText className="mt-3">最新已保存大纲全文、最后五章正文、全部已有梗概与勾选的写作规则由系统另行发送，无需在提示词中粘贴。修改提示词不会改变固定的取材范围；系统会附加事实来源、数值核对及大纲规划与已发生事实的区分说明。</MetaText>
     </Modal>
     <Modal open={!!preview} onClose={() => setPreview(null)} title={`速查历史 · v${preview?.version_number}`} width="max-w-4xl" footer={<Button variant="ghost" onClick={() => setPreview(null)}>关闭</Button>}>
       <div className="mb-4"><FormatSwitch /></div>
