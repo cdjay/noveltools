@@ -52,7 +52,7 @@ def mock_models(monkeypatch, before=None):
             assert request.extensions['timeout']['read'] == 3600
             assert set(context) == {'book_title', 'next_chapter_number', 'current_state', 'outline'}
             assert context['outline']['content'] == '未来大纲全文'
-            text = json.dumps({'title': f"新的相遇{context['next_chapter_number']}", 'content': '完整正文\n角色开始新的行动。'}, ensure_ascii=False)
+            text = f"第{context['next_chapter_number']}章 新的相遇{context['next_chapter_number']}\n\n完整正文\n角色开始新的行动。"
         else:
             text = '## 当前进度\n已核对正文的资料'
         return httpx.Response(200, json={'choices': [{'message': {'content': text}, 'finish_reason': 'stop'}]})

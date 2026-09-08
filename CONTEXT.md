@@ -60,7 +60,7 @@ BookMaterialVersion 按 book_id、material_key、version_number 保存标题与�
 
 ## 持续生成正文
 
-WritingJob / WritingJobItem 保存有数量上限的自动续写进度。工作流逐章补齐所有缺失或过时梗概，更新速查，将最新速查和大纲送给 chapter_writing 分流（默认 Gemini）生成 title/content，使用 add_chapter 与任务检查点同事务保存，再完成新章梗概和速查。补齐梗概使用 batch_summary，状态使用 current_state；启动及继续固定模型参数，密钥不写入快照。
+WritingJob / WritingJobItem 保存有数量上限的自动续写进度。工作流逐章补齐所有缺失或过时梗概，更新速查，将最新速查和大纲送给 chapter_writing 分流（默认 Gemini）生成首行章节标题、余下正文的纯文本，分别提取名称与正文后使用 add_chapter 与任务检查点同事务保存，再完成新章梗概和速查。补齐梗概使用 batch_summary，状态使用 current_state；启动及继续固定模型参数，密钥不写入快照。
 
 一书一个活动写作任务，独立 worker 顺序执行，等待已有本书梗概/速查任务时不发起重复请求。长请求不持有写事务；停止在当前步骤结束后生效，失败停留检查点。重启标记 interrupted，手动继续；已保存章节不会再生成一次。模型格式不正确、截断、来源变化均不创建新章，已生成章节删除不自动补造。详见 docs/writing-workflow-api.md。
 
