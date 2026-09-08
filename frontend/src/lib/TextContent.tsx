@@ -26,11 +26,6 @@ export function TextContent({ text, label, className = '', style, copy = true }:
 export function TextEditor(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   const format = useUiPrefs(state => state.textFormat)
   if (format === 'raw') return <Textarea {...props} />
-  return <div className="grid min-w-0 grid-cols-1 lg:grid-cols-2">
-    <div className="min-w-0"><Textarea {...props} /></div>
-    <section className="min-w-0 border-t border-line-soft p-5 lg:border-l lg:border-t-0" aria-label="Markdown 实时预览">
-      <div className="mb-3 text-meta text-ink-faint">Markdown 实时预览</div>
-      <TextContent text={String(props.value ?? '')} label={`${props['aria-label'] || '文本'}预览`} className="paper-text" style={props.style} />
-    </section>
-  </div>
+  return <TextContent text={String(props.value ?? '')} label={`${props['aria-label'] || '文本'}预览`}
+    className={props.className || 'paper-text min-h-24 p-3'} style={props.style} />
 }
