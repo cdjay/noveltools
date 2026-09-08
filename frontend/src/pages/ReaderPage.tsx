@@ -36,7 +36,6 @@ export function ReaderPage() {
   const [summarizing, setSummarizing] = useState(false)
   const [batchSummarizing, setBatchSummarizing] = useState(false)
   const [writingBusy, setWritingBusy] = useState(false)
-  const writingRefreshSequence = useRef(0)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [focusMode, setFocusMode] = useState(false)
@@ -299,13 +298,7 @@ export function ReaderPage() {
         {dirty && <Badge tone="warn">有未保存修改</Badge>}
         <div className="ml-auto flex max-w-full flex-wrap items-center gap-1.5">
           {currentBook && <WritingTaskControl key={currentBook.id} bookId={currentBook.id} disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing}
-            onBusy={setWritingBusy} onProgress={() => {
-              const bookId = currentBook.id
-              const sequence = ++writingRefreshSequence.current
-              void api<Chapter[]>(`/books/${bookId}/chapters?include_content=false`).then(next => {
-                if (sequence === writingRefreshSequence.current && useAppStore.getState().currentBook?.id === bookId) setChapters(next)
-              }).catch(() => undefined)
-            }} onOpen={id => {
+            onBusy={setWritingBusy} onOpen={id => {
               const chapter = useAppStore.getState().chapters.find(c => c.id === id)
               if (chapter) requestChapter(chapter)
             }} />}
