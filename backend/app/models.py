@@ -151,6 +151,33 @@ class CharacterVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class CurrentStateSettings(Base):
+    __tablename__ = "current_state_settings"
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
+    prompt: Mapped[str] = mapped_column(Text)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class CurrentStateVersion(Base):
+    __tablename__ = "current_state_versions"
+    __table_args__ = (UniqueConstraint("book_id", "version_number"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    note: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    source_manifest: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class CurrentStateLease(Base):
+    __tablename__ = "current_state_leases"
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
+
+
 class OutlineTextVersion(Base):
     """Immutable whole-outline snapshots; legacy tables remain intact."""
     __tablename__ = "outline_text_versions"

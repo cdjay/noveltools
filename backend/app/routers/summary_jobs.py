@@ -6,7 +6,7 @@ from sqlalchemy import case, delete, select, update
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
-from ..models import Book, Chapter, SummaryJob, SummaryJobItem, SummaryLease
+from ..models import Book, Chapter, SummaryJob, SummaryJobItem, SummaryLease, CurrentStateLease
 from .core import require_book
 from .summary import summary_provider, update_summary
 
@@ -102,6 +102,7 @@ def recover_interrupted():
         db.execute(update(SummaryJob).where(SummaryJob.status.in_(ACTIVE)).values(status="interrupted"))
         db.execute(update(SummaryJobItem).where(SummaryJobItem.status == "running").values(status="pending"))
         db.execute(delete(SummaryLease))
+        db.execute(delete(CurrentStateLease))
 
 
 def provider_config(provider):
