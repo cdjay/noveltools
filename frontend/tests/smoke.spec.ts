@@ -51,7 +51,7 @@ test('LLM 设置只提供普通 OpenAI Compatible 配置', async ({ page, reques
   await expect(page.getByLabel('生成等待（分钟）', { exact: true })).toHaveValue('30')
 })
 
-test('LLM 未保存配置不能误测旧配置，停用状态独立提示', async ({ page, request }) => {
+test('LLM 未保存配置不能误测旧配置，非默认状态独立提示', async ({ page, request }) => {
   const book = await (await request.post(`${TEST_BACKEND_ORIGIN}/api/books`, { data: { title: TEST_BOOK_TITLE } })).json()
   let provider = { id: 900, provider_name: '测试专用模型', provider_type: 'openai_compatible',
     base_url: 'https://model.invalid/v1', model: 'saved-model', temperature: 0.2,
@@ -69,7 +69,7 @@ test('LLM 未保存配置不能误测旧配置，停用状态独立提示', asyn
   })
   await page.goto(`/books/${book.id}/settings`)
   await page.getByRole('button', { name: /测试专用模型/ }).click()
-  await expect(page.getByText('此配置当前停用。', { exact: false })).toBeVisible()
+  await expect(page.getByText('此配置不是默认模型，', { exact: false })).toBeVisible()
   const button = page.getByRole('button', { name: '测试连接', exact: true })
   await button.click()
   expect(calls).toBe(1)

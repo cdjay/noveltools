@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { PlugZap, Plus } from 'lucide-react'
 import { api } from '../api/client'
 import type { Provider } from '../types'
-import { Badge, Button, Empty, Field, InlineError, InlineNotice, Input, Loading, MetaText, PageHeader, Panel, toast } from '../lib/ui'
+import { LLMRouting } from './LLMRouting'
+import { useUnsavedChanges } from '../lib/useUnsavedChanges'
+import { Badge, Button, Empty, Field, InlineError, InlineNotice, Input, Loading, MetaText, PageHeader, Panel, Tabs, toast } from '../lib/ui'
 
 type ProviderForm = {
   provider_name: string
@@ -29,7 +31,7 @@ const formFromProvider = (item: Provider): ProviderForm => ({
   timeout: item.timeout, enabled: item.enabled,
 })
 
-function ModelSettings() {
+function ModelSettings({ onDirty }: { onDirty: (dirty: boolean) => void }) {
   const [items, setItems] = useState<Provider[]>([])
   const [selected, setSelected] = useState<Provider | null>(null)
   const [form, setForm] = useState<ProviderForm>(defaultForm)
@@ -41,6 +43,7 @@ function ModelSettings() {
   const [models, setModels] = useState<string[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
   const dirty = JSON.stringify(form) !== JSON.stringify(selected ? formFromProvider(selected) : defaultForm)
+  useEffect(() => onDirty(dirty || saving || testing || fetchingModels), [dirty, saving, testing, fetchingModels, onDirty])
   const fetchModels = async () => {
     if (!selected || dirty || saving) return
     setFetchingModels(true); setError('')
@@ -92,7 +95,7 @@ function ModelSettings() {
   if (loading) return <Loading text="正在读取模型设置…" />
 
   return <div className="space-y-4">
-    <InlineNotice tone="accent" message={`当前生成模型：${items.find(item => item.enabled && item.has_api_key)?.model || '未启用可用模型'}。启用一个配置会停用其他配置。`} />
+    <InlineNotice tone="accent" message={`默认生成模型：${items.find(item => item.enabled && item.has_api_key)?.model || '未设置可用默认模型'}。未单独分流的模块使用默认模型；其他配置可在“模块分流”中指定。`} />
     {message && <InlineNotice tone="accent" message={message} />}
     {error && <InlineError message={error} />}
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
@@ -101,7 +104,7 @@ function ModelSettings() {
           {items.map(item => <button key={item.id} onClick={() => edit(item)} className={`w-full rounded-md border px-3 py-2.5 text-left transition-colors duration-fast ${selected?.id === item.id ? 'border-accent-300 bg-accent-50/60' : 'border-line-soft hover:bg-paper-sunken'}`}>
             <div className="flex items-center justify-between gap-2">
               <span className="truncate font-medium text-ink">{item.provider_name}</span>
-              <Badge tone={item.enabled ? 'ok' : 'neutral'}>{item.enabled ? '启用' : '停用'}</Badge>
+              <Badge tone={item.enabled ? 'ok' : 'neutral'}>{item.enabled ? '默认' : '可分流'}</Badge>
             </div>
             <MetaText className="mt-0.5">{item.model} · Key {item.has_api_key ? '已设置' : '未设置'}</MetaText>
           </button>)}
@@ -125,11 +128,11 @@ function ModelSettings() {
             <Field label="生成等待（分钟）" hint={`保存值 ${form.timeout} 秒；默认 30 分钟，可继续调大。`}><Input type="number" min={0.1} step={0.1} value={Number((form.timeout / 60).toFixed(3))} onChange={event => setForm({ ...form, timeout: Math.round(Number(event.target.value) * 60) })} /></Field>
           </div>
           <label className="flex items-center gap-2 text-body text-ink-soft">
-            <input type="checkbox" className="accent-accent-600" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} />启用此配置
+            <input type="checkbox" className="accent-accent-600" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} />设为默认模型
           </label>
           <p className="text-meta text-ink-soft">最大输出 Tokens 控制生成结果长度，不是模型输入容量。连接测试只发送短句、最多输出 10 Tokens；测试成功不代表长文本生成或持续调用一定可用。</p>
           {dirty && <MetaText>配置有未保存修改，请先保存，再测试连接或读取模型。</MetaText>}
-          {selected && !selected.enabled && <MetaText>此配置当前停用。连接测试成功不会自动启用；生成使用顶部显示的当前模型。</MetaText>}
+          {selected && !selected.enabled && <MetaText>此配置不是默认模型，可在“模块分流”中单独指定。连接测试不会改变默认或分流选择。</MetaText>}
           <div className="flex flex-wrap gap-2 border-t border-line-soft pt-4">
             <Button variant="primary" disabled={saving} onClick={() => void save()}>{saving ? '保存中…' : '保存配置'}</Button>
             <Button variant="secondary" disabled={!selected || testing || dirty || saving} onClick={() => void test()}><PlugZap size={14} />{testing ? '测试中…' : '测试连接'}</Button>
@@ -142,8 +145,14 @@ function ModelSettings() {
 }
 
 export function SettingsPage() {
+  const [tab, setTab] = useState<'models' | 'routing'>('models')
+  const [modelDirty, setModelDirty] = useState(false)
+  const [routingDirty, setRoutingDirty] = useState(false)
+  useUnsavedChanges(modelDirty || routingDirty)
   return <div className="p-6">
-    <PageHeader title="LLM 配置" description="配置全局共用，用于生成章节梗概、当前状态速查与连接测试。正文与大纲保存不会自动调用模型。" />
-    <div className="mt-5"><ModelSettings /></div>
+    <PageHeader title="LLM 配置" description="管理模型连接，并为章节梗概、批量梗概和当前状态速查分别指定模型。" />
+    <Tabs className="mt-5" value={tab} onChange={setTab} items={[['models', '模型列表'], ['routing', '模块分流']]} />
+    <div className="mt-5" hidden={tab !== 'models'}><ModelSettings onDirty={setModelDirty} /></div>
+    <div className="mt-5" hidden={tab !== 'routing'}><LLMRouting active={tab === 'routing'} onDirty={setRoutingDirty} /></div>
   </div>
 }
