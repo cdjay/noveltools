@@ -5,10 +5,12 @@ import { api } from '../api/client'
 import { useAppStore } from '../stores/useAppStore'
 import { useUiPrefs } from '../stores/useUiPrefs'
 import type { Chapter, Version, SummaryResult } from '../types'
-import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, MetaText, Modal, Panel, SectionTitle, Select, StatusBadge, Textarea, toast } from '../lib/ui'
+import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, MetaText, Modal, Panel, SectionTitle, Select, StatusBadge, toast } from '../lib/ui'
 import { ImportChapters } from '../lib/ImportChapters'
 import { ReorderChapters } from '../lib/ReorderChapters'
 import { SummaryTaskPanel } from '../lib/SummaryTaskPanel'
+import { CopyButton } from '../lib/CopyButton'
+import { FormatSwitch, TextContent, TextEditor } from '../lib/TextContent'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
 
 function countWords(text: string) { return text.replace(/\s/g, '').length }
@@ -37,6 +39,7 @@ export function ReaderPage() {
   const [focusMode, setFocusMode] = useState(false)
   const [diffPair, setDiffPair] = useState<{ left: number | null; right: number | null }>({ left: null, right: null })
   const [showDiff, setShowDiff] = useState(false)
+  const [historyPreview, setHistoryPreview] = useState<{ number: number; content: string } | null>(null)
   const [restoring, setRestoring] = useState<Version | null>(null)
   const [restoreBusy, setRestoreBusy] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -251,7 +254,7 @@ export function ReaderPage() {
           <Button size="sm" variant="subtle" disabled={creating || saving || loadingChapter} onClick={() => void createChapter()}><FilePlus2 size={13} />新建</Button>
         </div>
         <div className="relative mt-2.5">
-          <ListFilter size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint" />
+          <ListFilter size={13} className="pointer-events-none absolute z-10 left-2.5 top-1/2 -translate-y-1/2 text-ink-faint" />
           <Input className="py-1.5 pl-7 text-meta" placeholder="搜索章节" value={search} onChange={e => setSearch(e.target.value)} aria-label="搜索章节" />
         </div>
       </div>
@@ -306,14 +309,14 @@ export function ReaderPage() {
         editing ? <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
           <div className="mx-auto w-full max-w-measure flex-1 px-6 py-6">
             <Input className="border-transparent bg-transparent px-0 font-serif text-lg font-semibold focus:border-line" disabled={saving || restoreBusy || loadingChapter} value={title} onChange={e => { setTitle(e.target.value); rememberDraft(content, e.target.value) }} aria-label="章节标题" placeholder="章节标题" />
-            <Textarea className="paper-text mt-3 min-h-[60vh] resize-y border-0 bg-transparent px-0 shadow-none focus:border-transparent" style={{ fontSize: prefs.readerFontSize }} disabled={saving || restoreBusy || loadingChapter} value={content} onChange={e => { setContent(e.target.value); rememberDraft(e.target.value, title) }} placeholder="从这里开始写正文，或导入已有章节…" aria-label="章节正文" />
+            <TextEditor className="paper-text mt-3 min-h-[60vh] resize-y border-0 bg-transparent px-0 shadow-none focus:border-transparent" style={{ fontSize: prefs.readerFontSize }} disabled={saving || restoreBusy || loadingChapter} value={content} onChange={e => { setContent(e.target.value); rememberDraft(e.target.value, title) }} placeholder="从这里开始写正文，或导入已有章节…" aria-label="章节正文" />
           </div>
         </div>
         : <div ref={readScrollRef} onScroll={recordPosition} className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
           <article className="mx-auto max-w-measure px-6 py-8">
             <MetaText>第 {currentChapter.chapter_number} 章</MetaText>
             <h1 className="mt-1 font-serif text-2xl font-bold text-ink">{currentChapter.title}</h1>
-            <div className="mt-6 paper-text" style={{ fontSize: prefs.readerFontSize }}>{currentChapter.current_content || '本章还没有正文。切换到「编辑」开始写作。'}</div>
+            <TextContent label="正文内容" className="mt-6 paper-text" style={{ fontSize: prefs.readerFontSize }} text={currentChapter.current_content || '本章还没有正文。切换到「编辑」开始写作。'} />
           </article>
         </div>
       ) : <div className="flex flex-1 items-center justify-center"><MetaText>从左侧选择一章</MetaText></div>}
@@ -330,7 +333,7 @@ export function ReaderPage() {
       <div className="space-y-4 p-3.5"><Button size="sm" variant="ghost" onClick={prefs.toggleReaderContext}>关闭侧栏</Button>
         <Panel title="本章梗概">
           {currentChapter.summary_is_stale && <Badge tone="warn">正文已变化，建议重新生成</Badge>}
-          <p className="mt-2 whitespace-pre-wrap break-words text-body leading-7 text-ink-soft" aria-label="本章梗概内容">{currentChapter.summary || '尚未生成梗概。点击上方“生成本章梗概”，使用 LLM 整理本章内容。'}</p>
+          <TextContent label="本章梗概内容" className="mt-2 text-body leading-7 text-ink-soft" text={currentChapter.summary || '尚未生成梗概。点击上方“生成本章梗概”，使用 LLM 整理本章内容。'} />
           {currentChapter.summary_updated_at && <MetaText className="mt-2">{currentChapter.summary_model} · {new Date(currentChapter.summary_updated_at).toLocaleString()}</MetaText>}
           <MetaText className="mt-2">{dirty ? '正文有未保存修改，请先保存再生成。' : '按已保存正文生成；批量更新跳过正文未变化的章节。'}</MetaText>
         </Panel>
@@ -344,7 +347,8 @@ export function ReaderPage() {
                   <span className="text-meta text-ink-faint">{versionSourceLabel[version.source] || version.source}</span>
                 </div>
                 <MetaText className="mt-0.5">{version.word_count.toLocaleString()} 字 · {new Date(version.created_at).toLocaleString()}</MetaText>
-                {version.note && <MetaText className="mt-0.5">{version.note}</MetaText>}
+                {version.note && <TextContent label="版本备注" className="mt-0.5 text-meta text-ink-faint" text={version.note} />}
+                <Button size="sm" variant="ghost" onClick={async () => { try { const result = await api<{ left: { content: string } }>(`/chapters/${version.chapter_id}/diff?left=${version.id}&right=${version.id}`); setHistoryPreview({ number: version.version_number, content: result.left.content }) } catch (exc) { setError(String(exc)) } }}>查看 v{version.version_number}</Button>
                 {!isCurrent && <Button size="sm" variant="ghost" className="mt-1 px-1.5 text-accent-700" disabled={dirty || saving || loadingChapter} onClick={() => setRestoring(version)}><RotateCcw size={12} />恢复到此版本</Button>}
               </div>
             })}
@@ -378,9 +382,14 @@ export function ReaderPage() {
       title={`删除「${currentChapter?.title}」？`} confirmText="永久删除"
       description={<>将删除本章及其全部 {versions.length} 个历史版本，<strong className="text-danger-strong">不可撤销</strong>。</>} />
 
+    <Modal open={!!historyPreview} onClose={() => setHistoryPreview(null)} title={`正文历史 · v${historyPreview?.number}`} width="max-w-4xl" footer={<Button variant="ghost" onClick={() => setHistoryPreview(null)}>关闭</Button>}>
+      <div className="mb-4"><FormatSwitch /></div>
+      <TextContent text={historyPreview?.content || ''} label="历史正文全文" className="paper-text" />
+    </Modal>
     {/* 版本对比 */}
     <Modal open={showDiff} onClose={() => setShowDiff(false)} title="版本对比" description="选择两个版本查看字符级差异：红色删除线是被移除的内容，绿色是新增内容。" width="max-w-4xl"
       footer={<Button variant="ghost" onClick={() => setShowDiff(false)}>关闭</Button>}>
+      <div className="mb-4"><FormatSwitch /></div>
       <div className="mb-4 grid grid-cols-2 gap-3">
         {(['left', 'right'] as const).map(side => <Field key={side} label={side === 'left' ? '旧版本（左）' : '新版本（右）'}>
           <Select value={diffPair[side] || ''} onChange={e => setDiffPair({ ...diffPair, [side]: Number(e.target.value) || null })}>
@@ -390,7 +399,7 @@ export function ReaderPage() {
         </Field>)}
       </div>
       {diffVersions?.left && diffVersions?.right
-        ? <DiffView left={diffVersions.left.content} right={diffVersions.right.content} />
+        ? prefs.textFormat === 'markdown' ? <div className="grid gap-4 md:grid-cols-2"><section><MetaText>旧版本</MetaText><TextContent text={diffVersions.left.content} label="旧版本正文" className="paper-text" /></section><section><MetaText>新版本</MetaText><TextContent text={diffVersions.right.content} label="新版本正文" className="paper-text" /></section></div> : <><DiffView left={diffVersions.left.content} right={diffVersions.right.content} /><div className="mt-3 flex items-center gap-2 text-meta"><span>旧版本</span><CopyButton text={diffVersions.left.content} label="旧版本正文" /><span>新版本</span><CopyButton text={diffVersions.right.content} label="新版本正文" /></div></>
         : <Empty compact title="请选择两个版本" text="通常左边选较早的版本，右边选较晚的版本。" />}
     </Modal>
 

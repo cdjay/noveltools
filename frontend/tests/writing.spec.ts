@@ -17,7 +17,7 @@ test('只保留三个工作入口，大纲全文可保存、查看历史与恢�
     await page.getByRole('button', { name: '保存大纲', exact: true }).click()
     await expect(page.getByText('当前 v2', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: '查看 v1', exact: true }).click()
-    await expect(page.getByLabel('历史大纲全文')).toHaveText('第一稿：风雪中启程。\n\n自由编写，不分段块。')
+    await expect(page.getByLabel('历史大纲全文', { exact: true })).toHaveText('第一稿：风雪中启程。\n\n自由编写，不分段块。')
     await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).last().click()
     await page.getByRole('button', { name: '恢复 v1', exact: true }).click()
     await page.getByRole('button', { name: '恢复为新版本', exact: true }).click()

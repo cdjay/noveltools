@@ -5,10 +5,11 @@ import { api, API_BASE } from './api/client'
 import { useAppStore } from './stores/useAppStore'
 import { useUiPrefs } from './stores/useUiPrefs'
 import type { Book, Chapter } from './types'
-import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, Loading, Modal, PageHeader, Select, Textarea, toast, ToastHost } from './lib/ui'
+import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, Loading, Modal, PageHeader, Select, toast, ToastHost } from './lib/ui'
 import { ReaderPage } from './pages/ReaderPage'
 import { OutlinePage } from './pages/OutlinePage'
 import { SettingsPage } from './pages/SettingsPage'
+import { FormatSwitch, TextContent, TextEditor } from './lib/TextContent'
 import { RestoreBackup } from './lib/RestoreBackup'
 
 const bookStatusLabel: Record<string, string> = { draft: '草稿', ongoing: '连载', completed: '已完成' }
@@ -47,7 +48,8 @@ function BookFormModal({ open, onClose, book, onSaved }: { open: boolean; onClos
           <option value="draft">草稿</option><option value="ongoing">连载中</option><option value="completed">已完成</option>
         </Select>
       </Field>
-      <Field label="简介"><Textarea rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="一句话故事前提，帮助自己快速进入状态" /></Field>
+      <div className="flex justify-end"><FormatSwitch /></div>
+      <Field label="简介"><TextEditor aria-label="书籍简介" rows={3} value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="一句话故事前提，帮助自己快速进入状态" /></Field>
     </div>
   </Modal>
 }
@@ -87,13 +89,13 @@ function LibraryPage() {
             <div className="text-meta text-ink-faint">专注正文与大纲 · 内容保存在本机</div>
           </div>
         </div>
-        <div className="flex gap-2"><RestoreBackup onRestored={book => setBooks([book, ...useAppStore.getState().books])} /><Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true) }}><FilePlus2 size={15} />新建书籍</Button></div>
+        <div className="flex flex-wrap items-center gap-2"><FormatSwitch /><RestoreBackup onRestored={book => setBooks([book, ...useAppStore.getState().books])} /><Button variant="primary" onClick={() => { setEditing(null); setFormOpen(true) }}><FilePlus2 size={15} />新建书籍</Button></div>
       </div>
     </header>
     <main className="mx-auto max-w-6xl px-6 py-8 lg:px-10">
       <PageHeader title="我的书架" description="每本书的正文、大纲与历史版本独立保存。" actions={
         books.length > 0 ? <div className="relative">
-          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" />
+          <Search size={14} className="pointer-events-none absolute z-10 left-3 top-1/2 -translate-y-1/2 text-ink-faint" />
           <Input className="w-64 pl-8" placeholder="搜索书名、作者或类型" value={query} onChange={e => setQuery(e.target.value)} aria-label="搜索书籍" />
         </div> : undefined
       } />
@@ -109,7 +111,7 @@ function LibraryPage() {
               <Badge tone={bookStatusTone(book.status)}>{bookStatusLabel[book.status] || book.status}</Badge>
             </div>
             <div className="mt-1 text-meta text-ink-faint">{[book.author, book.genre].filter(Boolean).join(' · ') || '未填写作者与类型'}</div>
-            <p className="mt-3 line-clamp-2 min-h-10 text-body leading-6 text-ink-soft">{book.description || '还没有简介。'}</p>
+            <TextContent label="书籍简介" className="mt-3 max-h-28 min-h-10 overflow-y-auto text-body leading-6 text-ink-soft" text={book.description || '还没有简介。'} />
             <div className="mt-4 flex gap-6 border-t border-line-soft pt-3 text-meta text-ink-faint">
               <span><span className="font-semibold tabular-nums text-ink-soft">{book.chapter_count}</span> 章</span>
               <span><span className="font-semibold tabular-nums text-ink-soft">{book.total_word_count.toLocaleString()}</span> 字</span>
@@ -209,6 +211,7 @@ function WorkspaceLayout() {
           <span className="shrink-0 text-ink-soft">{activeLabel}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <FormatSwitch />
           <a href={`${API_BASE}/books/${bookId}/backup`} className="text-meta text-ink-faint transition-colors hover:text-accent-700" download>备份书籍</a>
           <a href={`${API_BASE}/books/${bookId}/export.txt`} className="text-meta text-ink-faint transition-colors hover:text-accent-700" download>导出 TXT</a>
         </div>

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { Upload } from 'lucide-react'
 import { api, upload } from '../api/client'
+import { FormatSwitch, TextContent } from './TextContent'
 import type { Chapter } from '../types'
 import { Button, InlineError, Input, MetaText, Modal, toast } from './ui'
 
@@ -36,13 +37,14 @@ export function ImportChapters({ bookId, disabled, onImported }: { bookId: numbe
     <Button variant="ghost" size="sm" disabled={disabled} onClick={() => input.current?.click()}><Upload size={13} />导入 TXT / Markdown</Button>
     <Modal open={!!file} onClose={() => { if (!busy) setFile(null) }} title="导入正文预览" description="确认章节边界后再导入，也可以保留为单章。" width="max-w-4xl"
       footer={<><Button variant="ghost" disabled={busy} onClick={() => setFile(null)}>取消</Button><Button variant="primary" disabled={busy || !preview} onClick={() => void confirm()}>{busy ? '处理中…' : `确认导入 ${preview?.chapters.length || 0} 章`}</Button></>}>
+      <div className="mb-3"><FormatSwitch /></div>
       {error && <InlineError message={error} />}
       <label className="flex gap-2 text-body"><input type="checkbox" checked={split} disabled={busy} onChange={event => file && void inspect(file, event.target.checked)} />按章节标题自动拆分</label>
       {preview && <>
         <MetaText className="my-3">{file?.name} · 编码 {preview.encoding} · {preview.chapters.length} 章</MetaText>
         <div className="grid grid-cols-[200px_minmax(0,1fr)] gap-4">
           <div className="max-h-80 overflow-y-auto">{preview.chapters.map((chapter, index) => <button key={index} className={`block w-full rounded p-2 text-left text-meta ${selected === index ? 'bg-accent-50' : ''}`} onClick={() => setSelected(index)}>{index + 1}. {chapter.title}</button>)}</div>
-          <div><Input aria-label="导入章节标题" value={preview.chapters[selected]?.title || ''} onChange={event => setPreview({ ...preview, chapters: preview.chapters.map((chapter, index) => index === selected ? { ...chapter, title: event.target.value } : chapter) })} /><div className="paper-text mt-3 max-h-80 overflow-y-auto whitespace-pre-wrap" aria-label="导入章节预览">{preview.chapters[selected]?.content}</div></div>
+          <div><Input aria-label="导入章节标题" value={preview.chapters[selected]?.title || ''} onChange={event => setPreview({ ...preview, chapters: preview.chapters.map((chapter, index) => index === selected ? { ...chapter, title: event.target.value } : chapter) })} /><TextContent className="paper-text mt-3 max-h-80 overflow-y-auto" label="导入章节预览" text={preview.chapters[selected]?.content || ''} /></div>
         </div>
       </>}
     </Modal>

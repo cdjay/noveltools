@@ -22,7 +22,7 @@ test('正文可手动生成和批量更新梗概，并保护未保存编辑', as
     const editor = page.getByRole('textbox', { name: '章节正文' })
     await editor.fill('梗概生成期间继续编辑的草稿')
     finish!()
-    await expect(page.getByLabel('本章梗概内容')).toHaveText(summary.summary)
+    await expect(page.getByLabel('本章梗概内容', { exact: true })).toHaveText(summary.summary)
     await expect(editor).toHaveValue('梗概生成期间继续编辑的草稿')
     await expect(page.getByRole('button', { name: '生成本章梗概', exact: true })).toBeDisabled()
     await expect(page.getByRole('button', { name: '批量更新章节梗概' })).toBeDisabled()

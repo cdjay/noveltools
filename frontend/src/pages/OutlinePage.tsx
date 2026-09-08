@@ -3,8 +3,9 @@ import { History, RotateCcw, Save } from 'lucide-react'
 import { api } from '../api/client'
 import { useAppStore } from '../stores/useAppStore'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
+import { FormatSwitch, TextContent, TextEditor } from '../lib/TextContent'
 import type { OutlineVersion } from '../types'
-import { Badge, Button, ConfirmModal, Empty, InlineError, Loading, MetaText, Modal, PageHeader, Textarea, toast } from '../lib/ui'
+import { Badge, Button, ConfirmModal, Empty, InlineError, Loading, MetaText, Modal, PageHeader, toast } from '../lib/ui'
 
 export function OutlinePage() {
   const { currentBook } = useAppStore()
@@ -58,7 +59,7 @@ export function OutlinePage() {
           {dirty && <Badge tone="warn">有未保存修改</Badge>}
           <MetaText className="ml-auto tabular-nums">{content.replace(/\s/g, '').length.toLocaleString()} 字</MetaText>
         </div>
-        <Textarea aria-label="大纲全文" disabled={busy || !loaded} value={content} onChange={e => setContent(e.target.value)} placeholder="在这里自由编写故事大纲，无需划分大纲块…"
+        <TextEditor aria-label="大纲全文" disabled={busy || !loaded} value={content} onChange={e => setContent(e.target.value)} placeholder="在这里自由编写故事大纲，无需划分大纲块…"
           className="paper-text min-h-[65vh] w-full resize-y rounded-none border-0 bg-transparent px-5 py-5 shadow-none focus:border-transparent sm:px-7" />
       </section>
       <aside aria-label="大纲历史" className="self-start rounded-lg border border-line bg-paper-raised">
@@ -67,7 +68,7 @@ export function OutlinePage() {
           {!versions.length ? <Empty compact title="暂无历史版本" text="第一次保存后，完整大纲会保留在这里。" /> : versions.map(version => <div key={version.id} className="rounded-md border border-line-soft p-3">
             <div className="flex items-center justify-between text-body"><strong>v{version.version_number}</strong>{version.id === latest?.id && <Badge tone="accent">当前</Badge>}</div>
             <MetaText className="mt-1">{new Date(version.created_at).toLocaleString()}</MetaText>
-            {version.note && <MetaText className="mt-1 break-words">{version.note}</MetaText>}
+            {version.note && <TextContent label="大纲版本备注" className="mt-1 text-meta text-ink-faint" text={version.note} />}
             <div className="mt-2 flex flex-wrap gap-1">
               <Button size="sm" variant="ghost" onClick={() => setPreview(version)}>查看 v{version.version_number}</Button>
               {version.id !== latest?.id && <Button size="sm" variant="ghost" disabled={busy} onClick={() => setRestoring(version)}><RotateCcw size={12} />恢复 v{version.version_number}</Button>}
@@ -77,7 +78,8 @@ export function OutlinePage() {
       </aside>
     </div>
     <Modal open={!!preview} onClose={() => setPreview(null)} title={`大纲历史 · v${preview?.version_number}`} width="max-w-4xl" footer={<Button variant="ghost" onClick={() => setPreview(null)}>关闭</Button>}>
-      <div className="paper-text min-h-40 whitespace-pre-wrap break-words" aria-label="历史大纲全文">{preview?.content || '此版本为空白大纲。'}</div>
+      <div className="mb-4"><FormatSwitch /></div>
+      <TextContent label="历史大纲全文" className="paper-text min-h-40" text={preview?.content || '此版本为空白大纲。'} />
     </Modal>
     <ConfirmModal open={!!restoring} onClose={() => { if (!busy) setRestoring(null) }} busy={busy} title={`恢复大纲 v${restoring?.version_number}？`} confirmText="恢复为新版本"
       description={`将以此版本全文创建新的历史版本，已有历史仍然保留。${dirty ? '当前未保存的编辑将被替换。' : ''}`} onConfirm={() => restoring && void save(restoring)} />

@@ -40,6 +40,36 @@ button:disabled { cursor: not-allowed; }
 }
 .paper-text::placeholder { color: #b5ae9d; }
 
+/* Markdown follows the site's type scale, with explicit styles after Tailwind's reset. */
+.markdown-text { white-space: normal; overflow-wrap: anywhere; line-height: 1.9; }
+.markdown-text > :first-child { margin-top: 0; }
+.markdown-text > :last-child { margin-bottom: 0; }
+.markdown-text p, .markdown-text ul, .markdown-text ol, .markdown-text blockquote,
+.markdown-text pre, .markdown-text .md-table-scroll { margin: 0.9em 0; }
+.markdown-text h1, .markdown-text h2, .markdown-text h3, .markdown-text h4,
+.markdown-text h5, .markdown-text h6 { font-weight: 650; line-height: 1.5; margin: 1.25em 0 0.5em; }
+.markdown-text h1 { font-size: 1.65em; }
+.markdown-text h2 { font-size: 1.4em; }
+.markdown-text h3 { font-size: 1.2em; }
+.markdown-text h4, .markdown-text h5, .markdown-text h6 { font-size: 1.05em; }
+.markdown-text ul { list-style: disc; padding-left: 1.6em; }
+.markdown-text ol { list-style: decimal; padding-left: 1.6em; }
+.markdown-text li > ul, .markdown-text li > ol { margin: 0.25em 0; }
+.markdown-text li + li { margin-top: 0.2em; }
+.markdown-text blockquote { border-left: 3px solid #b9cbcc; padding: 0.2em 1em; color: #67635c; background: #f2f5f4; }
+.markdown-text a { color: #365f63; text-decoration: underline; text-underline-offset: 3px; }
+.markdown-text code { font-family: ui-monospace, Consolas, monospace; font-size: 0.85em; border-radius: 4px; background: #eeece7; padding: 0.1em 0.3em; }
+.markdown-text pre { overflow-x: auto; max-width: 100%; padding: 1em; border-radius: 6px; background: #eeece7; white-space: pre; }
+.markdown-text pre code { background: none; padding: 0; }
+.markdown-text .md-table-scroll { max-width: 100%; overflow-x: auto; }
+.markdown-text table { border-collapse: collapse; min-width: 100%; font-size: 0.9em; }
+.markdown-text th, .markdown-text td { border: 1px solid #d5cfbd; padding: 0.45em 0.7em; min-width: 5em; }
+.markdown-text th { background: #f0eee8; font-weight: 600; }
+.markdown-text hr { margin: 1.5em 0; border-top: 1px solid #d5cfbd; }
+.markdown-text img { max-width: 100%; height: auto; border-radius: 5px; }
+.markdown-text .contains-task-list { list-style: none; }
+.markdown-text input[type="checkbox"] { margin-right: 0.5em; accent-color: #476e71; }
+
 /* 细滚动条 */
 .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
 .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
