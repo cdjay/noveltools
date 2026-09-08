@@ -81,7 +81,7 @@ def test_full_loop_repairs_sources_saves_separate_title_and_finishes_final_archi
     assert len(chapters) == 4
     assert [c['chapter_number'] for c in chapters] == [1, 2, 3, 4]
     assert chapters[-1]['title'] == '新的相遇4'
-    assert chapters[-1]['current_content'] == '完整正文\n角色开始新的行动。'
+    assert chapters[-1]['current_content'] == '　　完整正文\n\n　　角色开始新的行动。'
     assert all(c['summary'] and not c['summary_is_stale'] for c in chapters)
     assert not client.get(f'/api/books/{bid}/current-state').json()['is_stale']
     asyncio.run(writing.run_job(job['id']))

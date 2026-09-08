@@ -197,7 +197,7 @@ def test_writing_workflow_uses_module_backups_but_keeps_gemini_and_checkpoint(mo
     chapters = client.get(f'/api/books/{bid}/chapters').json()
     assert len(chapters) == 2 and chapters[-1]['summary_model'] == 'summaries'
     assert client.get(f'/api/books/{bid}/current-state').json()['version']['model'] == 'states'
-    assert chapters[-1]['current_content'] == '新章完整正文'
+    assert chapters[-1]['current_content'] == '　　新章完整正文'
 
 
 def test_gemini_output_limit_explained_without_exposing_error_body():
