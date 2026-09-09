@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams, Link } from 'react-router-dom'
 import { AArrowDown, AArrowUp, BookOpenText, Eye, FileDiff, FilePlus2, History, ListFilter, Maximize2, Minimize2, PanelLeft, PanelRight, PenLine, RotateCcw, Save, Trash2 } from 'lucide-react'
 import { diff_match_patch } from 'diff-match-patch'
 import { api } from '../api/client'
@@ -13,6 +14,7 @@ import { WritingTaskControl } from '../lib/WritingTaskControl'
 import { CopyButton } from '../lib/CopyButton'
 import { FormatSwitch, TextContent, TextEditor } from '../lib/TextContent'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
+import { ChapterPlanPanel } from '../lib/ChapterPlanPanel'
 
 function countWords(text: string) { return text.replace(/\s/g, '').length }
 
@@ -26,6 +28,7 @@ function DiffView({ left, right }: { left: string; right: string }) {
 const versionSourceLabel: Record<string, string> = { manual: '手动保存', import: '导入', imported: '导入', revised: '版本恢复', auto: '自动' }
 
 export function ReaderPage() {
+  const [searchParams] = useSearchParams()
   const { currentBook, chapters, setChapters, currentChapter, setCurrentChapter } = useAppStore()
   const prefs = useUiPrefs()
   const [content, setContent] = useState('')
@@ -114,7 +117,7 @@ export function ReaderPage() {
     if (dirty) setPendingSwitch(chapter)
     else void applyChapter(chapter)
   }
-  useEffect(() => { if (!initialized.current && chapters.length) { initialized.current = true; void applyChapter(chapters.find(item => item.id === currentBook?.current_chapter_id) || chapters[0]) } }, [currentBook?.id, chapters.length])
+  useEffect(() => { if (!initialized.current && chapters.length) { initialized.current = true; void applyChapter(chapters.find(item => item.id === Number(searchParams.get('chapter'))) || chapters.find(item => item.id === currentBook?.current_chapter_id) || chapters[0]) } }, [currentBook?.id, chapters.length])
   useUnsavedChanges(dirty)
 
 
@@ -241,6 +244,7 @@ export function ReaderPage() {
     {error && <InlineError message={error} />}
     <Empty icon={<BookOpenText size={24} />} title="这本书还没有章节" text="新建第一章开始写作，或导入已有的 TXT / Markdown 正文。" action={
       <div className="flex gap-2">
+        {currentBook && <Link className="rounded-md border border-line px-3 py-2 text-body text-accent-700" to={`/books/${currentBook.id}/chapter-plans`}>先规划章纲</Link>}
         {currentBook && <ImportChapters bookId={currentBook.id} disabled={false} onImported={imported} />}
         <Button variant="primary" disabled={creating || saving || loadingChapter} onClick={() => void createChapter()}><FilePlus2 size={15} />新建第一章</Button>
       </div>} />
@@ -338,6 +342,7 @@ export function ReaderPage() {
     {/* 右栏：本章梗概与版本历史 */}
     {showContext && currentChapter && <aside className="absolute inset-y-0 right-0 z-20 flex w-72 max-w-full shrink-0 flex-col overflow-y-auto border-l border-line bg-paper-raised shadow-pop scrollbar-thin xl:static xl:shadow-none" aria-label="章节历史与管理">
       <div className="space-y-4 p-3.5"><Button size="sm" variant="ghost" onClick={prefs.toggleReaderContext}>关闭侧栏</Button>
+        {currentBook && <ChapterPlanPanel bookId={currentBook.id} chapterId={currentChapter.id} versionId={currentChapter.current_version_id ?? null} />}
         <Panel title="本章梗概">
           {currentChapter.summary_is_stale && <Badge tone="warn">正文已变化，建议重新生成</Badge>}
           <TextContent label="本章梗概内容" className="mt-2 text-body leading-7 text-ink-soft" text={currentChapter.summary || '尚未生成梗概。点击上方“生成本章梗概”，使用 LLM 整理本章内容。'} />

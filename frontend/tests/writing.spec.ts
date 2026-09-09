@@ -30,7 +30,7 @@ test('工作入口包含独立速查页，大纲全文可保存、查看历史�
   try {
     await page.goto(`/books/${book.id}/outline`)
     const navigation = page.locator('aside[aria-label="工作区导航"] nav')
-    await expect(navigation.getByRole('button')).toHaveCount(5)
+    await expect(navigation.getByRole('button')).toHaveCount(6)
     for (const name of ['正文', '大纲', '当前状态速查', '书籍资料库', 'LLM 配置']) await expect(navigation.getByRole('button', { name, exact: true })).toBeVisible()
     const editor = page.getByRole('textbox', { name: '大纲全文', exact: true })
     await editor.fill('第一稿：风雪中启程。\n\n自由编写，不分段块。')

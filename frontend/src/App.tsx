@@ -8,6 +8,7 @@ import type { Book, Chapter } from './types'
 import { Badge, Button, ConfirmModal, Empty, Field, InlineError, Input, Loading, Modal, PageHeader, Select, toast, ToastHost } from './lib/ui'
 import { ReaderPage } from './pages/ReaderPage'
 import { OutlinePage } from './pages/OutlinePage'
+import { ChapterPlansPage } from './pages/ChapterPlansPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { CurrentStatePage } from './pages/CurrentStatePage'
 import { MaterialsPage } from './pages/MaterialsPage'
@@ -140,7 +141,7 @@ function LibraryPage() {
 
 type NavItem = { key: string; label: string; icon: typeof PenLine }
 const navGroups: { title: string; items: NavItem[] }[] = [
-  { title: '写作', items: [{ key: 'reader', label: '正文', icon: PenLine }, { key: 'outline', label: '大纲', icon: ListTree }, { key: 'current-state', label: '当前状态速查', icon: BookOpenText }] },
+  { title: '写作', items: [{ key: 'reader', label: '正文', icon: PenLine }, { key: 'outline', label: '大纲', icon: ListTree }, { key: 'chapter-plans', label: '章纲', icon: ListTree }, { key: 'current-state', label: '当前状态速查', icon: BookOpenText }] },
   { title: '管理', items: [{ key: 'materials', label: '书籍资料库', icon: LibraryBig }, { key: 'settings', label: 'LLM 配置', icon: Settings }] },
 ]
 
@@ -223,6 +224,7 @@ function WorkspaceLayout() {
         <Routes>
           <Route path="reader" element={<ReaderPage key={bookId} />} />
           <Route path="outline" element={<OutlinePage key={bookId} />} />
+          <Route path="chapter-plans/:planId?" element={<ChapterPlansPage key={bookId} />} />
           <Route path="current-state" element={<CurrentStatePage key={bookId} />} />
           <Route path="materials/:materialKey?" element={<MaterialsPage />} />
           <Route path="settings" element={<SettingsPage />} />
