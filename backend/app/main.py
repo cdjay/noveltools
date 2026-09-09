@@ -16,6 +16,7 @@ from .routers.materials import router as materials_router
 from .routers.llm_routes import router as llm_routes_router
 from .routers.llm_provider_actions import router as llm_provider_actions_router
 from .routers import writing_jobs
+from .routers.chapter_plans import router as chapter_plans_router
 
 Base.metadata.create_all(bind=engine)
 ensure_schema()
@@ -48,3 +49,4 @@ app.include_router(materials_router)
 app.include_router(llm_routes_router)
 app.include_router(llm_provider_actions_router)
 app.include_router(writing_jobs.router)
+app.include_router(chapter_plans_router)

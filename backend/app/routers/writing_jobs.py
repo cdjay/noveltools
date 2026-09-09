@@ -20,11 +20,13 @@ from ..schemas import ChapterCreate
 from ..services import content_sha256, next_chapter_number, read_content
 from .core import add_chapter, require_book
 from . import current_state
+from . import chapter_plans
 from .summary import update_summary
 
 router = APIRouter(prefix="/api", tags=["Writing workflow"])
 ACTIVE = ("queued", "running", "cancelling")
 WRITING_PROMPT = """你是中文长篇连载小说作者。输入提供完整大纲 outline、当前状态速查 current_state、最近五章完整正文 recent_chapters、全部梗概 all_summaries、作者选定写作规则 writing_rules。结合所有资料，只续写 next_chapter_number 指定的下一章。
+若输入包含 chapter_plan，它是作者已确认的本章计划（含固定标识和版本）；只执行本章目标，不提前执行后续章节。chapter_plan_guidance 是共同执行说明和勘误，须同时遵守。章纲与全书大纲存在无法消解的冲突时报告资料冲突，不能擅改任何一方。尚无正文时 current_state 会明确标为开篇，不得把计划当已发生事实。
 【阅读与剧情】
 读者以高中生和小白文读者为主，白话、简单易懂、行文流畅优先。用日常说法写清谁做什么、为什么、产生什么结果，保留必要的修仙名词和角色性格，不堆古话、生僻词、修饰和参数。常用的“没有、不能、不是、然后、最后、沉、压”等允许自然使用，不能为规避旧禁词改坏句子。以实际行动、转折和可感的收益推进，不用说明书和旁白总结代替剧情。
 大纲是最高剧情执行参考，未获作者明确授权不得改纲、减弱目标或回填正文摘要。发生偏离应调整正文；核心矛盾无法消解时报告冲突，不自行改计划。大纲中的未来事件仍未发生，不能提前记为事实。
@@ -99,8 +101,15 @@ def start(book_id: int, payload: StartWriting, db: Session = Depends(get_db)):
     existing = db.scalar(select(WritingJob).where(WritingJob.book_id == book_id, WritingJob.status.in_(ACTIVE)))
     if existing:
         return job_out(existing, db)
-    if not db.scalar(select(Chapter.id).where(Chapter.book_id == book_id).limit(1)):
+    selected_plan = chapter_plans.next_plan(db, book_id)
+    if not selected_plan and not db.scalar(select(Chapter.id).where(Chapter.book_id == book_id).limit(1)):
         raise HTTPException(400, "请先保存至少一章正文，再开始持续续写。")
+    if selected_plan:
+        remaining = [p for p in chapter_plans.plans(db, book_id) if p.chapter_id is None]
+        if len(remaining) < payload.chapter_count or any(
+            db.get(chapter_plans.ChapterPlanVersion, p.current_version_id).status != 'confirmed'
+            for p in remaining[:payload.chapter_count]):
+            raise HTTPException(409, "本次需要的连续章纲尚未全部确认，请减少生成章数或先确认章纲。")
     providers = provider_snapshots(db)
     _, context = current_state.snapshot(db, book_id)
     if not context["outline"] or not context["outline"]["content"].strip():
@@ -226,6 +235,8 @@ async def tick(job_id):
         if not item:
             job.status, job.step, job.message = "completed", "completed", "全部章节及梗概、速查已完成。"
             db.commit(); return False
+        plan = chapter_plans.next_plan(db, job.book_id) if item.status == 'pending' else None
+        plan_manifest = chapter_plans.snapshot(db, job.book_id)
         if item.status == "generated" and (not item.chapter_id or not item.version_id):
             raise ValueError("本任务已保存的章节或版本被删除，请核对历史；不会重新创建以免重复。")
         if other_generation(db, job.book_id):
@@ -233,7 +244,7 @@ async def tick(job_id):
             return True
         # Validate every source, including old chapters, before spending tokens on prose.
         chapters = db.scalars(select(Chapter).where(Chapter.book_id == job.book_id).order_by(Chapter.chapter_number)).all()
-        if not chapters:
+        if not chapters and not plan:
             raise ValueError("正文来源已被删除，请先恢复章节。")
         for chapter in chapters:
             body = read_content(db.get(ChapterVersion, chapter.current_version_id))
@@ -252,7 +263,7 @@ async def tick(job_id):
         if not sources['outline'] or not sources['outline']['content'].strip():
             raise ValueError("大纲为空，请保存大纲后继续。")
         state = current_state.latest(db, job.book_id)
-        if not state or not state.content.strip() or state.source_manifest != manifest:
+        if chapters and (not state or not state.content.strip() or state.source_manifest != manifest):
             provider, _ = frozen_provider(db, job, "current_state")
             mark_step(db, job, "state", "正在更新当前状态速查。")
             await current_state.generate_state(job.book_id, current_state.StateBase(base_version_id=state.id if state else None), db, provider, chain_override=job.providers["current_state"])
@@ -266,22 +277,32 @@ async def tick(job_id):
             mark_step(db, job, "preparing", f"第 {item.sequence} / {job.target_count} 章已完成正文、梗概与速查。")
             return True
         provider, _ = frozen_provider(db, job, "chapter_writing")
-        state_id = state.id
+        state_id = state.id if state else None
         context = {"book_title": sources['book_title'], "next_chapter_number": next_chapter_number(db, job.book_id),
-                   "current_state": {"version_number": state.version_number, "content": state.content}, "outline": sources['outline'],
+                   "current_state": {"version_number": state.version_number, "content": state.content} if chapters else
+                       {"version_number": 0, "content": "本书尚无正文。请依据大纲开篇基准与已确认的首章章纲写第一章；未来计划均未发生。"}, "outline": sources['outline'],
                    "recent_chapters": sources['recent_chapters'], "all_summaries": sources['all_summaries'],
                    "writing_rules": sources['writing_rules']}
+        if plan:
+            context['chapter_plan'] = {'plan_id': plan.id, **chapter_plans.version_out(db.get(chapter_plans.ChapterPlanVersion, plan.current_version_id))}
+            # Datetime metadata is not needed in the model payload.
+            context['chapter_plan'].pop('created_at', None)
+            context['chapter_plan_guidance'] = chapter_plans.guidance(db, job.book_id)
         mark_step(db, job, "writing", f"正在生成第 {item.sequence} / {job.target_count} 章正文。")
         (title, content), actual = await run_with_fallback(job.providers['chapter_writing'], 'chapter_writing',
             lambda selected: generate_chapter(selected, context))
         provider = actual
         lock_book(db, job.book_id)
-        if manifest != current_state.snapshot(db, job.book_id)[0] or current_state.latest(db, job.book_id).id != state_id:
-            raise ValueError("生成正文期间大纲、正文、梗概、速查、写作规则或提示词已变化，结果未写入；请继续任务重新核对。")
+        fresh_state = current_state.latest(db, job.book_id)
+        if (manifest != current_state.snapshot(db, job.book_id)[0] or (fresh_state.id if fresh_state else None) != state_id
+                or chapter_plans.snapshot(db, job.book_id) != plan_manifest):
+            raise ValueError("生成正文期间大纲、章纲、正文、梗概、速查、写作规则或提示词已变化，结果未写入；请继续任务重新核对。")
         if item.status != "pending":
             raise ValueError("任务章节已处理，未重复创建。")
         chapter = add_chapter(job.book_id, ChapterCreate(title=title, content=content, source="auto",
             note=f"持续生成任务 {job.id} · 第 {item.sequence} 章 · {provider.model}"), db)
+        if plan:
+            chapter_plans.record_generation(db, plan, chapter)
         item.chapter_id, item.version_id, item.title, item.status = chapter.id, chapter.current_version_id, title, "generated"
         # Chapter creation and workflow checkpoint commit together, making resume idempotent.
         mark_step(db, job, "preparing", "正文已保存，接下来生成本章梗概并更新速查。")

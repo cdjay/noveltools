@@ -69,7 +69,7 @@ def test_material_backup_roundtrip_and_old_formats():
     client.post(base + '/writing-rules/versions', json={'title': '写作规则', 'content': '规则二', 'base_version_id': v1['id']})
     note = client.post(base, json={'title': '另一份资料', 'content': '资料原文'}).json()
     backup = client.get(f"/api/books/{book['id']}/backup").json()
-    assert backup['schema_version'] == 3 and len(backup['material_versions']) == 3
+    assert backup['schema_version'] == 4 and len(backup['material_versions']) == 3
     def upload(path, archive):
         return client.post(path, files={'file': ('backup.json', json.dumps(archive).encode())})
     assert upload('/api/backups/preview', backup).json()['materials'] == 2

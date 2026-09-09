@@ -158,7 +158,7 @@ def test_backup_roundtrip_and_legacy_archive():
     client.put(url + '/settings', json={'prompt': '本书专用提示词', 'base_revision': 0})
     client.post(url + '/versions', json={'content': '## 当前进度\n待续', 'base_version_id': None})
     backup = client.get(f"/api/books/{book['id']}/backup")
-    assert backup.json()['schema_version'] == 3
+    assert backup.json()['schema_version'] == 4
     copied = client.post('/api/backups/restore', files={'file': ('state.json', backup.content)}).json()
     copied_url = f"/api/books/{copied['id']}/current-state"
     state = client.get(copied_url).json()

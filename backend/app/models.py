@@ -232,6 +232,42 @@ class OutlineTextVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class ChapterPlan(Base):
+    __tablename__ = "chapter_plans"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    current_version_id: Mapped[int | None] = mapped_column(nullable=True)
+    chapter_id: Mapped[int | None] = mapped_column(ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True, unique=True)
+    reviewed_plan_version_id: Mapped[int | None] = mapped_column(nullable=True)
+    reviewed_chapter_version_id: Mapped[int | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ChapterPlanVersion(Base):
+    __tablename__ = "chapter_plan_versions"
+    __table_args__ = (UniqueConstraint("plan_id", "version_number"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("chapter_plans.id", ondelete="CASCADE"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(200))
+    volume: Mapped[str] = mapped_column(String(200), default="第一卷")
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    source: Mapped[str] = mapped_column(String(30), default="manual")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ChapterPlanUse(Base):
+    """Immutable provenance for each generated body version, independent of later edits."""
+    __tablename__ = "chapter_plan_uses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_version_id: Mapped[int] = mapped_column(ForeignKey("chapter_plan_versions.id", ondelete="CASCADE"))
+    chapter_version_id: Mapped[int] = mapped_column(ForeignKey("chapter_versions.id", ondelete="CASCADE"), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 # Historical models are retained for existing database compatibility.
 class Outline(Base):
     __tablename__ = "outlines"
