@@ -88,7 +88,7 @@ def latest(db, book_id):
                      .order_by(CurrentStateVersion.version_number.desc()).limit(1))
 
 
-def snapshot(db, book_id):
+def snapshot(db, book_id, before_chapter_number=None):
     book = require_book(db, book_id)
     settings = db.get(CurrentStateSettings, book_id)
     rules = []
@@ -103,6 +103,9 @@ def snapshot(db, book_id):
     # Book-local version numbers survive backup restoration; database IDs do not.
     outline_source = {"version_number": outline.version_number, "content_sha256": content_sha256(outline.content)} if outline else None
     chapters = db.scalars(select(Chapter).where(Chapter.book_id == book_id).order_by(Chapter.chapter_number, Chapter.id)).all()
+    # Planned empty bodies are not events and must never enter the story memory.
+    chapters = [c for c in chapters if c.word_count > 0 and
+                (before_chapter_number is None or c.chapter_number < before_chapter_number)]
     recent_ids = {chapter.id for chapter in chapters[-5:]}
     manifest, bodies, summaries, missing, stale = [], [], [], [], []
     for chapter in chapters:

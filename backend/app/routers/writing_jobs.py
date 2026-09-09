@@ -98,6 +98,10 @@ def require_job(db, job_id):
 @router.post("/books/{book_id}/writing-jobs")
 def start(book_id: int, payload: StartWriting, db: Session = Depends(get_db)):
     lock_book(db, book_id)
+    from .canvas_writing import ACTIVE as CANVAS_ACTIVE
+    from ..models import CanvasWritingJob
+    if db.scalar(select(CanvasWritingJob.id).where(CanvasWritingJob.book_id == book_id, CanvasWritingJob.status.in_(CANVAS_ACTIVE))):
+        raise HTTPException(409, "本书正在运行画布正文任务，请等待完成。")
     existing = db.scalar(select(WritingJob).where(WritingJob.book_id == book_id, WritingJob.status.in_(ACTIVE)))
     if existing:
         return job_out(existing, db)
@@ -147,6 +151,10 @@ def cancel(job_id: int, db: Session = Depends(get_db)):
 def resume(job_id: int, db: Session = Depends(get_db)):
     job = require_job(db, job_id)
     lock_book(db, job.book_id)
+    from .canvas_writing import ACTIVE as CANVAS_ACTIVE
+    from ..models import CanvasWritingJob
+    if db.scalar(select(CanvasWritingJob.id).where(CanvasWritingJob.book_id == job.book_id, CanvasWritingJob.status.in_(CANVAS_ACTIVE))):
+        raise HTTPException(409, "本书正在运行画布正文任务，请等待完成。")
     if job.status not in ("failed", "interrupted", "cancelled"):
         raise HTTPException(409, "任务不能继续：正在运行或已经完成。")
     if db.scalar(select(WritingJob.id).where(WritingJob.book_id == job.book_id, WritingJob.status.in_(ACTIVE))):

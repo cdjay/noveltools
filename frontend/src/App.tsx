@@ -15,6 +15,7 @@ import { MaterialsPage } from './pages/MaterialsPage'
 import { FormatSwitch, TextContent, TextEditor } from './lib/TextContent'
 import { RestoreBackup } from './lib/RestoreBackup'
 import { WritingTaskHost } from './lib/WritingTaskControl'
+import { CanvasWritingHost } from './lib/CanvasWriting'
 
 const bookStatusLabel: Record<string, string> = { draft: '草稿', ongoing: '连载', completed: '已完成' }
 const bookStatusTone = (status: string) => status === 'completed' ? 'ok' as const : status === 'ongoing' ? 'accent' as const : 'neutral' as const
@@ -242,6 +243,7 @@ export default function App() {
       <Route path="/books/:bookId/*" element={<WorkspaceLayout />} />
     </Routes>
     <WritingTaskHost />
+    <CanvasWritingHost />
     <ToastHost />
   </>
 }

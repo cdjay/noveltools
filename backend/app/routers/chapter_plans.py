@@ -1,4 +1,4 @@
-"""Independent versioned plans; no empty chapters and no title/number based binding."""
+"""Independent versioned plans with explicit chapter creation and stable bindings."""
 import re
 from uuid import uuid4
 from typing import Literal
@@ -38,6 +38,26 @@ class PlanSave(PlanText):
 
 class PlanBase(BaseModel):
     base_version_id: int
+
+
+@router.post("/{plan_id}/create-chapter")
+def create_blank_chapter(book_id: int, plan_id: str, payload: PlanBase, db: Session = Depends(get_db)):
+    from .core import add_chapter
+    from ..schemas import ChapterCreate
+    lock(db, book_id)
+    p = require_plan(db, book_id, plan_id, payload.base_version_id)
+    v = db.get(ChapterPlanVersion, p.current_version_id)
+    if p.chapter_id:
+        raise HTTPException(409, "此章纲已经绑定正文，请打开已有正文；如需更换，请手动绑定。")
+    existing = db.scalar(select(Chapter).where(Chapter.book_id == book_id,
+        (Chapter.chapter_number == p.position) | (Chapter.title == v.title)))
+    if existing:
+        raise HTTPException(409, f"第 {existing.chapter_number} 章《{existing.title}》已存在，请在正文关联中手动绑定，未创建重复章节。")
+    chapter = add_chapter(book_id, ChapterCreate(title=v.title, chapter_number=p.position,
+        content="", source="plan", note=f"由章纲 {p.id} v{v.version_number} 创建空白正文"), db)
+    p.chapter_id = chapter.id
+    db.commit()
+    return plan_out(db, p)
 
 
 class Bind(PlanBase):

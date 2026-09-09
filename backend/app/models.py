@@ -76,6 +76,35 @@ class WritingJob(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
 
+class CanvasWritingSettings(Base):
+    __tablename__ = "canvas_writing_settings"
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(128))
+    output_node_id: Mapped[str] = mapped_column(String(128))
+    output_port: Mapped[str] = mapped_column(String(128), default="text")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class CanvasWritingJob(Base):
+    __tablename__ = "canvas_writing_jobs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    chapter_id: Mapped[int] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), index=True)
+    base_version_id: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="queued")
+    message: Mapped[str] = mapped_column(Text, default="等待核对资料")
+    workflow_id: Mapped[str] = mapped_column(String(128))
+    workflow_etag: Mapped[str] = mapped_column(String(100))
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    source: Mapped[dict] = mapped_column(JSON, default=dict)
+    manifest: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw_output: Mapped[str] = mapped_column(Text, default="")
+    saved_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
 class WritingJobItem(Base):
     __tablename__ = "writing_job_items"
     __table_args__ = (UniqueConstraint("job_id", "sequence"),)

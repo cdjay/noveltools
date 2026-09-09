@@ -15,6 +15,7 @@ import { CopyButton } from '../lib/CopyButton'
 import { FormatSwitch, TextContent, TextEditor } from '../lib/TextContent'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
 import { ChapterPlanPanel } from '../lib/ChapterPlanPanel'
+import { CanvasWritingButton } from '../lib/CanvasWriting'
 
 function countWords(text: string) { return text.replace(/\s/g, '').length }
 
@@ -119,6 +120,22 @@ export function ReaderPage() {
   }
   useEffect(() => { if (!initialized.current && chapters.length) { initialized.current = true; void applyChapter(chapters.find(item => item.id === Number(searchParams.get('chapter'))) || chapters.find(item => item.id === currentBook?.current_chapter_id) || chapters[0]) } }, [currentBook?.id, chapters.length])
   useUnsavedChanges(dirty)
+  const canvasRefresh = useRef({dirty, currentChapter, applyChapter})
+  canvasRefresh.current = {dirty, currentChapter, applyChapter}
+  useEffect(() => {
+    const saved = (e: Event) => {
+      const {chapterId, bookId} = (e as CustomEvent).detail
+      const live = canvasRefresh.current
+      if (live.currentChapter && live.currentChapter.id === chapterId) {
+        if (live.dirty) toast('工作流已保存新版本；当前未保存草稿保留，请核对后重新载入')
+        else void live.applyChapter(live.currentChapter)
+      } else if (useAppStore.getState().currentBook?.id === bookId) {
+        void api<Chapter[]>(`/books/${bookId}/chapters?include_content=false`).then(c => useAppStore.getState().setChapters(c))
+      }
+    }
+    window.addEventListener('canvas-prose-saved', saved)
+    return () => window.removeEventListener('canvas-prose-saved', saved)
+  }, [])
 
 
   /* 阅读模式下恢复并持续记录阅读位置 */
@@ -301,6 +318,7 @@ export function ReaderPage() {
         <div className="mx-1 h-5 w-px bg-line" />
         {dirty && <Badge tone="warn">有未保存修改</Badge>}
         <div className="ml-auto flex max-w-full flex-wrap items-center gap-1.5">
+          {currentChapter && <CanvasWritingButton chapter={currentChapter} disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing || writingBusy}/>}
           {currentBook && <WritingTaskControl key={currentBook.id} bookId={currentBook.id} disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing}
             onBusy={setWritingBusy} onOpen={id => {
               const chapter = useAppStore.getState().chapters.find(c => c.id === id)

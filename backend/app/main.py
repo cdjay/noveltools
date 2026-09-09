@@ -17,6 +17,7 @@ from .routers.llm_routes import router as llm_routes_router
 from .routers.llm_provider_actions import router as llm_provider_actions_router
 from .routers import writing_jobs
 from .routers.chapter_plans import router as chapter_plans_router
+from .routers import canvas_writing
 
 Base.metadata.create_all(bind=engine)
 ensure_schema()
@@ -26,9 +27,14 @@ migrate_legacy_outlines()
 async def lifespan(app):
     recover_interrupted()
     writing_jobs.recover_interrupted()
+    canvas_writing.recover_interrupted()
     task = asyncio.create_task(worker())
     writing_task = asyncio.create_task(writing_jobs.worker())
+    canvas_task = asyncio.create_task(canvas_writing.worker())
     yield
+    canvas_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await canvas_task
     writing_task.cancel()
     task.cancel()
     with suppress(asyncio.CancelledError):
@@ -50,3 +56,4 @@ app.include_router(llm_routes_router)
 app.include_router(llm_provider_actions_router)
 app.include_router(writing_jobs.router)
 app.include_router(chapter_plans_router)
+app.include_router(canvas_writing.router)

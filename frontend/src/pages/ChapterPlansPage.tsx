@@ -88,9 +88,18 @@ export function ChapterPlansPage() {
     const next = [...ids]; [next[from], next[to]] = [next[to], next[from]]
     setData(await api<PlanList>(`${base}/reorder`, { method: 'POST', body: JSON.stringify({ plan_ids: next, previous_order: ids }) }))
   })
+  const createBody = () => act(async () => {
+    if (!current) return
+    const p = await api<ChapterPlan>(`${base}/${current.id}/create-chapter`, { method: 'POST', body: JSON.stringify({ base_version_id: current.version.id }) })
+    accept(p)
+    const fresh = await api<Chapter[]>(`/books/${bid}/chapters?include_content=false`)
+    setChapters(fresh); useAppStore.getState().setChapters(fresh)
+    toast('已创建带标题的空白正文并绑定章纲')
+    navigate(`/books/${bid}/reader?chapter=${p.chapter_id}`)
+  })
   if (loading) return <Loading text="正在读取章纲…" />
   return <div className="mx-auto max-w-7xl p-5 lg:p-7">
-    <PageHeader title="章纲" description="先规划，再写正文。确认后的章纲按顺序用于生成，不会提前创建空白章节。" actions={<>
+    <PageHeader title="章纲" description="先规划，再写正文。点击生成正文可创建带标题的空白章并绑定；正文页再调用工作流写作。" actions={<>
       <WritingTaskControl bookId={bid} disabled={dirty || busy} onBusy={setWritingBusy} onOpen={id => { navigate(`/books/${bid}/reader?chapter=${id}`) }} />
       <Button disabled={busy || writingBusy} onClick={() => { if (discardOK()) { setCreating(true); setSelected(null); setDraft(blank()); setHistory([]) } }}><Plus size={14} />新建章纲</Button>
     </>} />
@@ -115,7 +124,7 @@ export function ChapterPlansPage() {
         </div>
       </aside>
       {(current || creating) ? <div className="min-w-0 space-y-4">
-        <Panel title={creating ? '新章纲' : `章纲 · v${current?.version.version_number}`} action={<Button variant="primary" disabled={busy || !draft.title.trim() || !draft.content.trim() || (!dirty && !creating)} onClick={() => void save()}><Save size={14} />保存章纲</Button>}>
+        <Panel title={creating ? '新章纲' : `章纲 · v${current?.version.version_number}`} action={<div className="flex flex-wrap gap-2"><Button variant="primary" disabled={busy || !draft.title.trim() || !draft.content.trim() || (!dirty && !creating)} onClick={() => void save()}><Save size={14} />保存章纲</Button>{current && !creating && <Button disabled={busy || dirty || writingBusy} title="创建空白正文、填写标题并绑定章纲；已有正文时提示冲突" onClick={() => void createBody()}>生成正文</Button>}</div>}>
           {dirty && <div className="mb-3"><Badge tone="warn">有未保存修改</Badge></div>}
           <div className="grid gap-4 sm:grid-cols-2"><Field label="所属卷"><Input value={draft.volume} disabled={busy} onChange={e => setDraft(d => ({ ...d, volume: e.target.value }))} /></Field><Field label="拟定章节名"><Input value={draft.title} disabled={busy} onChange={e => setDraft(d => ({ ...d, title: e.target.value }))} /></Field></div>
           <div className="mt-4"><Field label="章纲状态" hint="确认表示允许生成；恢复旧版后需要重新确认。"><Select value={draft.status} disabled={busy} onChange={e => setDraft(d => ({ ...d, status: e.target.value as 'draft' | 'confirmed' }))}><option value="draft">草稿</option><option value="confirmed">已确认</option></Select></Field></div>
