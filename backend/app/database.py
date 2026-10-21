@@ -34,6 +34,10 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 
 def ensure_schema() -> None:
     """Apply the small additive migrations needed by the local SQLite app."""
+    item_columns = {column['name'] for column in inspect(engine).get_columns('writing_job_items')}
+    if 'execution' not in item_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE writing_job_items ADD COLUMN execution JSON NOT NULL DEFAULT '{}'"))
     state_columns = {column["name"] for column in inspect(engine).get_columns("current_state_settings")}
     if "writing_rule_keys" not in state_columns:
         with engine.begin() as connection:

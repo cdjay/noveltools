@@ -34,8 +34,8 @@ def fixture():
 
 def graph(bid):
     return {'nodes': [
-        {'id': 'book-source', 'type': 'chapter-context', 'inputs': {'bookId': str(bid)}},
-        {'id': 'materials-source', 'type': 'material-context', 'inputs': {'bookId': str(bid), 'materialKeys': ['writing-rules']}},
+        {'id': 'book-source', 'type': 'chapter-context', 'inputs': {'bookId': str(bid), 'requireReader': True}},
+        {'id': 'materials-source', 'type': 'material-context', 'inputs': {'bookId': str(bid), 'requireReader': True, 'materialKeys': ['writing-rules']}},
         {'id': 'final-prose', 'type': 'llm', 'inputs': {'model': 'gemini-test'}},
     ], 'edges': []}
 
@@ -59,7 +59,7 @@ def test_create_blank_is_explicit_atomic_and_duplicate_safe():
     body = client.get(f'/api/chapters/{cid}').json()
     assert body['title'] == '初见' and body['current_content'] == ''
     url = f"/api/books/{bid}/chapter-plans/{p['id']}/create-chapter"
-    assert client.post(url, json={'base_version_id': p['version']['id']}).status_code == 409
+    assert client.post(url, json={'base_version_id': p['version']['id']}).json()['chapter_id'] == cid
     other = client.post(f'/api/books/{bid}/chapter-plans', json={'title': '初见', 'content': '另一个目标'}).json()
     assert client.post(f"/api/books/{bid}/chapter-plans/{other['id']}/create-chapter", json={'base_version_id': other['version']['id']}).status_code == 409
     assert len(client.get(f'/api/books/{bid}/chapters').json()) == 1
@@ -96,6 +96,13 @@ def test_canvas_round_trip_saves_selected_chapter_and_version(monkeypatch):
     assert client.get(f'/api/workflow-writing/jobs/{jid}').json()['status'] == 'completed'
     asyncio.run(cw.tick(jid))
     assert client.get(f'/api/chapters/{cid}').json()['summary'] == ''
+    logs = client.get(f'/api/workflow-writing/jobs/{jid}').json()['logs']
+    assert logs[0]['text'] == '任务已创建，等待准备资料'
+    assert any(entry['text'] == 'final-prose · 完成' for entry in logs)
+    assert logs[-1]['text'].startswith('正文已保存')
+    assert all(entry['time'] for entry in logs)
+    assert len({entry['id'] for entry in logs}) == len(logs)
+    assert '风从石缝' not in str(logs)
 
 
 def test_changed_plan_preserves_raw_output_without_overwrite(monkeypatch):
@@ -264,3 +271,38 @@ def test_standalone_context_does_not_leak_later_state(monkeypatch):
     result=client.get(f'/api/books/{bid}/chapters/1/writing-context').json()
     assert '找到退路' in result['planText']
     assert '开篇基准' in result['stateText'] and '未来已经脱逃' not in result['stateText']
+
+
+def test_reader_configuration_rejected_before_creating_job(monkeypatch):
+    bid, _, cid, vid = fixture()
+    original = graph
+    def unchecked_graph(book_id):
+        g = original(book_id)
+        g['nodes'][0]['inputs']['requireReader'] = False
+        return g
+    monkeypatch.setitem(globals(), 'graph', unchecked_graph)
+    submitted = []
+    fake_canvas(monkeypatch, bid, submitted)
+    r = client.post(f'/api/chapters/{cid}/workflow-writing', json={'base_version_id': vid})
+    assert r.status_code == 409
+    assert '仅从正文页传入' in r.text and 'book-source' in r.text
+    assert client.get(f'/api/books/{bid}/workflow-writing/latest').json() is None
+    assert not submitted
+
+
+def test_draft_plan_can_generate_first_body_and_binding_opens_existing(monkeypatch):
+    bid, plan, cid, vid = fixture()
+    updated = client.post(f"/api/books/{bid}/chapter-plans/{plan['id']}/versions", json={
+        'base_version_id': plan['version']['id'], 'title': '初见', 'content': '找到退路', 'status': 'draft'}).json()
+    r = client.post(f"/api/books/{bid}/chapter-plans/{plan['id']}/create-chapter", json={'base_version_id': updated['version']['id']})
+    assert r.status_code == 200 and r.json()['chapter_id'] == cid
+    fake_canvas(monkeypatch, bid, [])
+    # Reader-mode configuration is required for generation, independently of plan status.
+    original = graph
+    def reader_graph(book_id):
+        g = original(book_id)
+        for n in g['nodes'][:2]: n['inputs']['requireReader'] = True
+        return g
+    monkeypatch.setitem(globals(), 'graph', reader_graph)
+    r = client.post(f'/api/chapters/{cid}/workflow-writing', json={'base_version_id': vid})
+    assert r.status_code == 200, r.text

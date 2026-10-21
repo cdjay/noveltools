@@ -6,7 +6,7 @@ import type { Chapter } from '../types'
 import { Button, Field, InlineError, MetaText, Modal, Select, toast } from './ui'
 import { TextContent } from './TextContent'
 
-type Job = { id: string; book_id: number; chapter_id: number; status: string; message: string; workflow_id: string; run_id: string | null; saved_version_id: number | null; has_output: boolean; node_progress?: {label: string; status: string}[] }
+type Job = { id: string; book_id: number; chapter_id: number; status: string; message: string; workflow_id: string; run_id: string | null; saved_version_id: number | null; has_output: boolean; logs?: {id: number; time: string; text: string}[]; node_progress?: {label: string; status: string}[] }
 const active = (j: Job | null) => !!j && ['queued', 'preparing', 'submitting', 'running', 'archiving'].includes(j.status)
 const useWindow = create<{job: Job | null; open: boolean; busy: boolean; error: string}>(() => ({job: null, open: false, busy: false, error: ''}))
 const remember = (job: Job) => { try { localStorage.setItem('canvas-writing-job', job.id) } catch { /* Optional recovery hint. */ } }
@@ -16,20 +16,20 @@ export function CanvasWritingButton({ chapter, disabled }: { chapter: Chapter; d
   const begin = async () => {
     if (active(state.job)) { useWindow.setState({open: true}); return }
     if (chapter.word_count > 0 && !window.confirm('本章已有正文。工作流将生成并保存新版本，原正文保留在历史中，是否继续？')) return
-    useWindow.setState({busy: true, error: '', open: true})
+    useWindow.setState({busy: true, error: '', open: true, job: null})
     try {
       const job = await api<Job>(`/chapters/${chapter.id}/workflow-writing`, {method: 'POST', body: JSON.stringify({base_version_id: chapter.current_version_id, replace_existing: chapter.word_count > 0})})
       remember(job); useWindow.setState({job})
     } catch (e) { useWindow.setState({error: String(e)}) }
     finally { useWindow.setState({busy: false}) }
   }
-  return <><Button size="sm" disabled={disabled || state.busy} onClick={() => void begin()}><Workflow size={14}/>{active(state.job) ? '查看工作流进度' : '工作流生成正文'}</Button><WorkflowSettings bookId={chapter.book_id} disabled={state.busy || active(state.job)}/></>
+  return <Button size="sm" disabled={disabled || state.busy} onClick={() => void begin()}><Workflow size={14}/>{active(state.job) ? '查看工作流进度' : '工作流生成正文'}</Button>
 }
 
 type WorkflowSelection = {workflow_id: string; output_node_id: string; output_port: string; revision: number}
 type OutputChoice = {node_id: string; label: string; port: string}
 
-function WorkflowSettings({bookId, disabled}: {bookId: number; disabled: boolean}) {
+export function WorkflowSettings({bookId, disabled}: {bookId: number; disabled: boolean}) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loadingOutputs, setLoadingOutputs] = useState(false)
@@ -91,7 +91,14 @@ export function CanvasWritingHost() {
   const [collapsed, setCollapsed] = useState(false)
   const [position, setPosition] = useState<{left: number; top: number} | null>(null)
   const [output, setOutput] = useState<string | null>(null)
+  const logPanel = useRef<HTMLDivElement>(null)
+  const followLog = useRef(true)
+  useEffect(() => {
+    if (followLog.current && logPanel.current) logPanel.current.scrollTop = logPanel.current.scrollHeight
+  }, [job?.id, job?.logs?.[job.logs.length - 1]?.id, collapsed, open])
+  useEffect(() => { setOutput(null); followLog.current = true }, [job?.id])
   const seen = useRef(new Set<string>())
+  useEffect(() => { if (busy || error) setCollapsed(false) }, [busy, error])
   useEffect(() => {
     let alive = true
     const restore = async () => {
@@ -99,7 +106,7 @@ export function CanvasWritingHost() {
         const id = localStorage.getItem('canvas-writing-job')
         if (id) {
           const j = await api<Job>(`/workflow-writing/jobs/${id}`)
-          if (alive && !useWindow.getState().busy && !useWindow.getState().job) useWindow.setState({job: j, open: active(j)})
+          if (alive && !useWindow.getState().busy && !useWindow.getState().job) useWindow.setState({job: j, open: true})
         }
       } catch { /* A removed historical job does not block writing. */ }
     }
@@ -137,10 +144,26 @@ export function CanvasWritingHost() {
   const progress = !job ? 0 : ({queued: 5, preparing: 20, submitting: 35, running: 55, archiving: 85, completed: 100}[job.status] ?? (job.saved_version_id ? 85 : 0))
   if (!open) return null
   return <>
-    <aside aria-label="画布正文工作流" className="fixed z-50 w-[360px] max-w-[calc(100vw-24px)] rounded-lg border border-line bg-paper-raised shadow-xl" style={position ? {left: position.left, top: position.top} : {right: 20, bottom: 20}}>
-      <div className="flex cursor-move touch-none items-center gap-2 border-b border-line px-3 py-2" onPointerDown={drag}><GripHorizontal size={15}/><span className="flex-1 text-body font-medium">正文工作流</span><Button size="sm" variant="ghost" aria-label={collapsed ? '展开工作流进度' : '折叠工作流进度'} onClick={() => setCollapsed(!collapsed)}>{collapsed ? <Plus size={14}/> : <Minus size={14}/>}</Button>{!active(job) && !busy && <Button size="sm" variant="ghost" aria-label="关闭工作流进度" onClick={() => useWindow.setState({open: false})}><X size={14}/></Button>}</div>
-      <div className="p-3"><p className="text-meta text-ink-soft">{busy ? '正在提交任务…' : job?.message || '准备调用画布'}</p><div role="progressbar" aria-label="画布执行阶段" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} className="mt-2 h-1.5 overflow-hidden rounded bg-paper-sunken"><div className="h-full bg-accent-600 transition-all" style={{width: `${progress}%`}}/></div>
-        {!collapsed && <div className="mt-3 space-y-2">{error && <InlineError message={error}/>}{job?.node_progress?.map((n, i) => <div key={i} className="flex justify-between gap-2 text-meta"><span>{n.label}</span><span>{{SUCCEEDED:'完成',RUNNING:'运行中',PENDING:'等待',READY:'就绪',FAILED:'失败',CANCELLED:'停止',WAITING:'等待返回'}[n.status] || n.status}</span></div>)}<MetaText>补齐前文梗概与速查 → 提取设定 → 拼装提示词 → Gemini → 保存正文待审阅</MetaText><a className="block text-meta text-accent-700" href={`http://localhost:3010/${job ? `?workflow=${encodeURIComponent(job.workflow_id)}` : ""}`} target="_blank" rel="noreferrer">打开画布查看节点与运行日志</a><div className="flex gap-2">{active(job) && <Button size="sm" onClick={() => void api<Job>(`/workflow-writing/jobs/${job!.id}/cancel`, {method: 'POST'}).then(j => useWindow.setState({job: j})).catch(e => useWindow.setState({error: String(e)}))}>停止</Button>}{job?.has_output && <Button size="sm" onClick={() => void api<{text: string}>(`/workflow-writing/jobs/${job.id}/output`).then(r => setOutput(r.text)).catch(e => useWindow.setState({error: String(e)}))}>查看模型输出</Button>}</div></div>}
+    <aside aria-label="画布正文工作流" className="fixed z-50 flex max-h-[calc(100dvh-40px)] w-[420px] max-w-[calc(100vw-40px)] flex-col overflow-hidden rounded-lg border border-line bg-paper-raised shadow-xl" style={position ? {left: position.left, top: position.top} : {right: 20, bottom: 20}}>
+      <div className="flex shrink-0 cursor-move touch-none items-center gap-2 border-b border-line px-3 py-2" onPointerDown={drag}><GripHorizontal size={15}/><span className="flex-1 text-body font-medium">正文工作流</span><Button size="sm" variant="ghost" aria-label={collapsed ? '展开工作流进度' : '折叠工作流进度'} onClick={() => setCollapsed(!collapsed)}>{collapsed ? <Plus size={14}/> : <Minus size={14}/>}</Button>{!busy && <Button size="sm" variant="ghost" aria-label="关闭工作流进度" onClick={() => useWindow.setState({open: false})}><X size={14}/></Button>}</div>
+      <div className="min-h-0 overflow-y-auto p-3"><p className="text-meta text-ink-soft">{busy ? '正在提交任务…' : error && !job ? '任务未启动，请修正下方配置问题' : job?.message || '准备调用画布'}</p><div role="progressbar" aria-label="画布执行阶段" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} className="mt-2 h-1.5 overflow-hidden rounded bg-paper-sunken"><div className="h-full bg-accent-600 transition-all" style={{width: `${progress}%`}}/></div>
+        {error && <div className="mt-2"><InlineError message={error}/></div>}
+        {!collapsed && <div className="mt-3 space-y-3">
+          <section aria-label="运行日志">
+            <div className="mb-2 flex items-center justify-between"><span className="text-meta font-medium">运行日志</span><MetaText>最近 100 条 · 自动保存</MetaText></div>
+            <div ref={logPanel} role="log" aria-label="工作流运行日志" tabIndex={0}
+              onScroll={e => { const el = e.currentTarget; followLog.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24 }}
+              className="max-h-56 overflow-y-auto rounded-md border border-line-soft bg-paper p-2 text-meta">
+              {job?.logs?.length ? job.logs.map(entry => <div key={entry.id} className="flex gap-2 py-1">
+                <time className="shrink-0 tabular-nums text-ink-faint" dateTime={entry.time}>{new Date(entry.time).toLocaleTimeString('zh-CN', {hour12: false})}</time>
+                <span className="min-w-0 whitespace-pre-wrap break-words text-ink-soft">{entry.text}</span>
+              </div>) : <MetaText>{job ? '此任务暂无历史日志。后续运行记录将在这里显示。' : '任务启动后，运行记录将在这里显示。'}</MetaText>}
+            </div>
+          </section>
+          {!!job?.node_progress?.length && <details><summary className="cursor-pointer text-meta text-ink-soft">节点当前状态</summary><div className="mt-2 space-y-1">{job.node_progress.map((n, i) => <div key={i} className="flex justify-between gap-2 text-meta"><span className="min-w-0 break-words">{n.label}</span><span className="shrink-0">{{SUCCEEDED:'完成',RUNNING:'运行中',PENDING:'等待',READY:'就绪',FAILED:'失败',CANCELLED:'停止',WAITING:'等待返回'}[n.status] || n.status}</span></div>)}</div></details>}
+          <a className="block text-meta text-accent-700" href={`http://localhost:3010/${job ? `?workflow=${encodeURIComponent(job.workflow_id)}` : ''}`} target="_blank" rel="noreferrer">打开画布编辑工作流</a>
+        </div>}
+        <div className="mt-3 flex gap-2">{active(job) && <Button size="sm" onClick={() => void api<Job>(`/workflow-writing/jobs/${job!.id}/cancel`, {method: 'POST'}).then(j => useWindow.setState({job: j})).catch(e => useWindow.setState({error: String(e)}))}>停止</Button>}{job?.has_output && <Button size="sm" onClick={() => void api<{text: string}>(`/workflow-writing/jobs/${job.id}/output`).then(r => setOutput(r.text)).catch(e => useWindow.setState({error: String(e)}))}>查看模型输出</Button>}</div>
       </div>
     </aside>
     <Modal open={output !== null} onClose={() => setOutput(null)} title="本次工作流原始输出" width="max-w-4xl"><TextContent label="工作流输出" text={output || ''} className="paper-text"/></Modal>

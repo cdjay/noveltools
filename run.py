@@ -142,7 +142,7 @@ def start_process(service: str) -> bool:
         cwd = ROOT
     elif service == "frontend":
         npm = "npm.cmd" if os.name == "nt" else "npm"
-        command = [npm, "run", "dev", "--", "--host", "127.0.0.1"]
+        command = [npm, "run", "dev", "--", "--host", "0.0.0.0"]
         cwd = FRONTEND_DIR
     else:
         log_file.close()

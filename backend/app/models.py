@@ -115,6 +115,7 @@ class WritingJobItem(Base):
     version_id: Mapped[int | None] = mapped_column(ForeignKey("chapter_versions.id", ondelete="SET NULL"), nullable=True)
     title: Mapped[str] = mapped_column(String(200), default="")
     status: Mapped[str] = mapped_column(String(30), default="pending")
+    execution: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class SummaryJob(Base):
@@ -575,3 +576,28 @@ class LLMFailoverEvent(Base):
     module: Mapped[str] = mapped_column(String(60))
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class PlanWritingSettings(Base):
+    __tablename__ = "plan_writing_settings"
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(128))
+
+
+class PlanWritingJob(Base):
+    __tablename__ = "plan_writing_jobs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    target_count: Mapped[int] = mapped_column(Integer)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(30), default="queued")
+    message: Mapped[str] = mapped_column(Text, default="等待章纲续写")
+    workflow_id: Mapped[str] = mapped_column(String(128))
+    workflow_etag: Mapped[str] = mapped_column(String(100))
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    source: Mapped[dict] = mapped_column(JSON, default=dict)
+    manifest: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw_output: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)

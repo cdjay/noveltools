@@ -8,7 +8,7 @@ test('原文与 Markdown 覆盖正文大纲梗概历史，切换及复制不改�
   const book = await (await request.post(`${api}/books`, { data: { title: 'Markdown 验收', description: '**书籍简介**' } })).json()
   const chapter = await (await request.post(`${api}/books/${book.id}/chapters`, { data: { title: '初见', content: source } })).json()
   try {
-    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.setViewportSize({ width: 1920, height: 1080 })
     await page.goto(`/books/${book.id}/reader`)
     await expect(page.getByLabel('正文内容', { exact: true })).toHaveText(source)
     await page.getByRole('button', { name: 'Markdown', exact: true }).click()

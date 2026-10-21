@@ -1,4 +1,5 @@
 import httpx
+import json
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -71,3 +72,37 @@ def test_retry_after_http_date_and_model_not_found():
     assert '稍后' in describe({}, {'Retry-After': '-1'})
     assert '秒' not in describe({}, {'Retry-After': 'Infinity'})
     assert '模型“test-model”不存在' in describe({'error': {'code': 'model_not_found'}}, status=404)
+
+
+@pytest.mark.parametrize('temperature, expected_ok', [(0.7, False), (1, True)])
+def test_connection_checks_configured_temperature(monkeypatch, temperature, expected_ok):
+    provider = client.post('/api/llm/providers', json={
+        'base_url': 'https://temperature.invalid/v1', 'model': 'k3',
+        'api_key': 'test-only', 'temperature': temperature,
+    }).json()
+    original = httpx.AsyncClient
+
+    def respond(request):
+        payload = json.loads(request.content)
+        # Observed k3 behavior: omitted temperature defaults to 1.
+        if payload.get('temperature', 1) != 1:
+            return httpx.Response(400, json={'error': {
+                'type': 'invalid_request_error',
+                'message': 'invalid temperature: only 1 is allowed for this model',
+            }})
+        return httpx.Response(200, json={'choices': [{'message': {'content': '连接成功'}}]})
+
+    monkeypatch.setattr(core.httpx, 'AsyncClient', lambda **kw: original(
+        **kw, transport=httpx.MockTransport(respond)))
+    result = client.post(f"/api/llm/providers/{provider['id']}/test").json()
+    assert result['ok'] is expected_ok
+    if not expected_ok:
+        assert '温度' in result['message'] and '1' in result['message']
+
+
+def test_temperature_error_explains_required_value_without_echoing_payload():
+    result = describe({'error': {'type': 'invalid_request_error', 'message':
+        'invalid temperature: only 1 is allowed for this model; api_key=secret; private novel'}}, status=400)
+    assert '温度' in result and '1' in result and 'HTTP 400' in result
+    assert 'secret' not in result and 'private novel' not in result
+    assert '温度' not in describe({'error': {'message': 'other invalid parameter'}}, status=400)

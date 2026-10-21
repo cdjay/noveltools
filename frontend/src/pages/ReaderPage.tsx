@@ -15,9 +15,22 @@ import { CopyButton } from '../lib/CopyButton'
 import { FormatSwitch, TextContent, TextEditor } from '../lib/TextContent'
 import { useUnsavedChanges } from '../lib/useUnsavedChanges'
 import { ChapterPlanPanel } from '../lib/ChapterPlanPanel'
-import { CanvasWritingButton } from '../lib/CanvasWriting'
+import { WorkflowSettings } from '../lib/CanvasWriting'
+import { ChapterGenerationButton } from '../lib/ChapterGenerationModal'
+import { ChapterReview } from '../lib/ChapterReview'
 
 function countWords(text: string) { return text.replace(/\s/g, '').length }
+
+function useNarrow(query: string) {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const update = () => setMatches(media.matches)
+    update(); media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [query])
+  return matches
+}
 
 function DiffView({ left, right }: { left: string; right: string }) {
   const diffs = useMemo(() => { const dmp = new diff_match_patch(); return dmp.diff_main(left, right) }, [left, right])
@@ -26,7 +39,7 @@ function DiffView({ left, right }: { left: string; right: string }) {
   </div>
 }
 
-const versionSourceLabel: Record<string, string> = { manual: '手动保存', import: '导入', imported: '导入', revised: '版本恢复', auto: '自动' }
+const versionSourceLabel: Record<string, string> = { manual: '手动保存', import: '导入', imported: '导入', revised: '版本恢复', auto: '自动', workflow: '工作流生成', plan: '章纲创建', review_revision: '审稿修订' }
 
 export function ReaderPage() {
   const [searchParams] = useSearchParams()
@@ -40,9 +53,15 @@ export function ReaderPage() {
   const [summarizing, setSummarizing] = useState(false)
   const [batchSummarizing, setBatchSummarizing] = useState(false)
   const [writingBusy, setWritingBusy] = useState(false)
+  const [generationBusy, setGenerationBusy] = useState(false)
+  const [reviewBusy, setReviewBusy] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [focusMode, setFocusMode] = useState(false)
+  const compactContext = useNarrow('(max-width: 1440px)')
+  const compactChapters = useNarrow('(max-width: 900px)')
+  const [contextOverlay, setContextOverlay] = useState(false)
+  const [chaptersOverlay, setChaptersOverlay] = useState(false)
   const [diffPair, setDiffPair] = useState<{ left: number | null; right: number | null }>({ left: null, right: null })
   const [showDiff, setShowDiff] = useState(false)
   const [historyPreview, setHistoryPreview] = useState<{ number: number; content: string } | null>(null)
@@ -114,6 +133,7 @@ export function ReaderPage() {
     finally { if (token === requestId.current) setLoadingChapter(false) }
   }
   const requestChapter = (chapter: Chapter) => {
+    setChaptersOverlay(false)
     if (saving || restoreBusy || chapter.id === currentChapter?.id) return
     if (dirty) setPendingSwitch(chapter)
     else void applyChapter(chapter)
@@ -161,7 +181,7 @@ export function ReaderPage() {
     setSaving(true); setError('')
     try {
       const version = await api<Version>(`/chapters/${currentChapter.id}/versions`, { method: 'POST', body: JSON.stringify({ content, title, base_version_id: baseVersion.current, note: '阅读器手动保存' }) })
-      const updated = { ...currentChapter, title, current_content: content, current_version_id: version.id, word_count: version.word_count, summary_is_stale: !!currentChapter.summary }
+      const updated = { ...currentChapter, title, status: 'draft', current_content: content, current_version_id: version.id, word_count: version.word_count, summary_is_stale: !!currentChapter.summary }
       if (useAppStore.getState().currentChapter?.id !== updated.id) return true
       baseVersion.current = version.id
       clearDraft(updated.id); setDraftRestored(false)
@@ -254,8 +274,10 @@ export function ReaderPage() {
     return () => { active = false }
   }, [showDiff, currentChapter?.id, diffPair.left, diffPair.right])
   const visible = chapters.filter(item => `${item.title}${item.chapter_number}`.includes(search))
-  const showChapters = prefs.readerShowChapters && !focusMode
-  const showContext = prefs.readerShowContext && !focusMode
+  const showChapters = (compactChapters ? chaptersOverlay : prefs.readerShowChapters) && !focusMode
+  const showContext = (compactContext ? contextOverlay : prefs.readerShowContext) && !focusMode
+  const toggleContext = () => compactContext ? setContextOverlay(value => !value) : prefs.toggleReaderContext()
+  const toggleChapters = () => compactChapters ? setChaptersOverlay(value => !value) : prefs.toggleReaderChapters()
 
   if (chapters.length === 0) return <div className="flex h-full items-center justify-center p-8">
     {error && <InlineError message={error} />}
@@ -267,13 +289,13 @@ export function ReaderPage() {
       </div>} />
   </div>
 
-  return <div className="relative flex h-full min-h-0">
+  return <div className="reader-workspace relative flex h-full min-h-0 bg-paper">
 
     {/* 左栏：章节列表 */}
-    <aside className={`${showChapters ? 'flex' : 'hidden'} w-60 shrink-0 flex-col border-r border-line bg-paper-raised`} aria-label="章节列表">
+    <aside className={`${showChapters ? 'flex' : 'hidden'} reader-chapters shrink-0 flex-col bg-paper`} aria-label="章节列表">
       <div className="border-b border-line-soft p-3">
         <div className="flex items-center justify-between">
-          <SectionTitle>章节 · {chapters.length}</SectionTitle>
+          <SectionTitle>章节 · {chapters.length}</SectionTitle>{compactChapters && <Button size="sm" variant="ghost" onClick={() => setChaptersOverlay(false)}>收起</Button>}
           <Button size="sm" variant="subtle" disabled={creating || saving || loadingChapter} onClick={() => void createChapter()}><FilePlus2 size={13} />新建</Button>
         </div>
         <div className="relative mt-2.5">
@@ -285,13 +307,13 @@ export function ReaderPage() {
         {visible.length === 0 ? <MetaText className="py-8 text-center">{search ? '没有匹配的章节' : '暂无章节'}</MetaText> : visible.map(chapter => {
           const active = currentChapter?.id === chapter.id
           return <button key={chapter.id} onClick={() => requestChapter(chapter)} aria-current={active ? 'true' : undefined}
-            className={`mb-0.5 w-full rounded-md border-l-2 px-3 py-2.5 text-left transition-colors duration-fast ${active ? 'border-accent-600 bg-accent-50' : 'border-transparent hover:bg-paper-sunken'}`}>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-meta tabular-nums text-ink-faint">第 {chapter.chapter_number} 章</span>
-              <StatusBadge status={chapter.status} label={chapter.status === 'draft' ? '草稿' : chapter.status === 'approved' ? '已审定' : chapter.status} />
+            className={`chapter-row mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left transition-colors duration-fast ${active ? 'border-accent-600 bg-accent-50 ring-1 ring-inset ring-accent-200' : 'border-transparent hover:bg-paper-sunken'}`}>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="shrink-0 text-meta tabular-nums text-ink-soft">第 {chapter.chapter_number} 章</span>
+              <span className={`min-w-0 flex-1 truncate text-body ${active ? 'font-semibold text-accent-800' : 'text-ink'}`} title={chapter.title}>{chapter.title.replace(/^第[^章]{1,12}章\s*/, '') || chapter.title}</span>
+              <span className="shrink-0 text-meta tabular-nums text-ink-faint">{chapter.word_count.toLocaleString()}字</span>
             </div>
-            <div className={`mt-0.5 truncate text-body font-medium ${active ? 'text-accent-800' : 'text-ink'}`}>{chapter.title}</div>
-            <div className="mt-0.5 text-meta tabular-nums text-ink-faint">{chapter.word_count.toLocaleString()} 字</div>
+            {active && <div className="mt-2 space-y-1.5"><StatusBadge status={chapter.status} label={chapter.status === 'approved' ? '正式稿' : '草稿'} /><p className="line-clamp-2 text-meta leading-relaxed text-ink-soft">{chapter.summary || '暂无概要'}</p>{chapter.summary_is_stale && <span className="text-meta text-warn-strong">概要待更新</span>}</div>}
           </button>
         })}
       </div>
@@ -305,7 +327,7 @@ export function ReaderPage() {
     <div className="flex min-w-0 flex-1 flex-col bg-paper">
       {/* 工具栏 */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-line bg-paper-raised px-4 py-2">
-        <Button size="sm" variant="ghost" title="章节列表" aria-label="切换章节列表" onClick={() => { if (focusMode) setFocusMode(false); else prefs.toggleReaderChapters() }}><PanelLeft size={15} /></Button>
+        <Button size="sm" variant="ghost" title="章节列表" aria-label="切换章节列表" onClick={() => { if (focusMode) setFocusMode(false); else toggleChapters() }}><PanelLeft size={15} /></Button>
         <div className="flex items-center rounded-md border border-line" role="group" aria-label="阅读与编辑模式">
           <button onClick={() => prefs.setReaderMode('read')} className={`flex items-center gap-1 rounded-l-md px-2.5 py-1.5 text-meta transition-colors ${!editing ? 'bg-accent-600 text-white' : 'text-ink-soft hover:bg-paper-sunken'}`}><Eye size={13} />阅读</button>
           <button onClick={() => prefs.setReaderMode('edit')} className={`flex items-center gap-1 rounded-r-md px-2.5 py-1.5 text-meta transition-colors ${editing ? 'bg-accent-600 text-white' : 'text-ink-soft hover:bg-paper-sunken'}`}><PenLine size={13} />编辑</button>
@@ -318,15 +340,20 @@ export function ReaderPage() {
         <div className="mx-1 h-5 w-px bg-line" />
         {dirty && <Badge tone="warn">有未保存修改</Badge>}
         <div className="ml-auto flex max-w-full flex-wrap items-center gap-1.5">
-          {currentChapter && <CanvasWritingButton chapter={currentChapter} disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing || writingBusy}/>}
-          {currentBook && <WritingTaskControl key={currentBook.id} bookId={currentBook.id} disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing}
+          {currentChapter && <ChapterGenerationButton bookId={currentChapter.book_id} startChapter={currentChapter.chapter_number}
+            hasBody={currentChapter.word_count > 0} label={currentChapter.word_count > 0 ? '重写本章正文' : '工作流生成正文'}
+            disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing || writingBusy || reviewBusy || generationBusy}
+            onBusy={setGenerationBusy}/>} 
+          {currentChapter && <ChapterReview key={`review:${currentChapter.id}`} chapter={currentChapter} disabled={dirty || saving || loadingChapter || writingBusy} onBusy={setReviewBusy}/>}
+          {currentBook && <WorkflowSettings bookId={currentBook.id} disabled={saving || reviewBusy || writingBusy}/>}
+          {currentBook && <WritingTaskControl key={`writing:${currentBook.id}`} bookId={currentBook.id} disabled={dirty || saving || loadingChapter || summarizing || batchSummarizing}
             onBusy={setWritingBusy} onOpen={id => {
               const chapter = useAppStore.getState().chapters.find(c => c.id === id)
               if (chapter) requestChapter(chapter)
             }} />}
           <Button size="sm" variant="secondary" disabled={!currentChapter || dirty || saving || summarizing || batchSummarizing || writingBusy} title={dirty ? '请先保存正文修改，再生成梗概' : '使用已保存的本章正文生成梗概'} onClick={() => void generateSummary()}>{summarizing ? '梗概生成中…' : '生成本章梗概'}</Button>
-          <Button size="sm" variant="secondary" disabled={saving || loadingChapter || !currentChapter} onClick={() => void save()}><Save size={14} />{saving ? '保存中…' : '保存新版本'}</Button>
-          <Button size="sm" variant="ghost" title="梗概与历史" aria-label="切换梗概与历史" onClick={() => { if (focusMode) setFocusMode(false); else prefs.toggleReaderContext() }}><PanelRight size={15} /></Button>
+          <Button size="sm" variant="secondary" disabled={saving || loadingChapter || reviewBusy || !currentChapter} onClick={() => void save()}><Save size={14} />{saving ? '保存中…' : '保存新版本'}</Button>
+          <Button size="sm" variant="ghost" title="梗概与历史" aria-label="切换梗概与历史" onClick={() => { if (focusMode) setFocusMode(false); else toggleContext() }}><PanelRight size={15} /></Button>
         </div>
       </div>
       {error && <div className="shrink-0 px-4 pt-3"><InlineError message={error} /></div>}
@@ -336,15 +363,18 @@ export function ReaderPage() {
       {/* 正文区 */}
       {currentChapter ? (
         editing ? <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
-          <div className="mx-auto w-full max-w-measure flex-1 px-6 py-6">
+          <div className="reader-manuscript mx-auto w-full flex-1">
             <Input className="border-transparent bg-transparent px-0 font-serif text-lg font-semibold focus:border-line" disabled={saving || restoreBusy || loadingChapter} value={title} onChange={e => { setTitle(e.target.value); rememberDraft(content, e.target.value) }} aria-label="章节标题" placeholder="章节标题" />
             <TextEditor className="paper-text mt-3 min-h-[60vh] resize-y border-0 bg-transparent px-0 shadow-none focus:border-transparent" style={{ fontSize: prefs.readerFontSize }} disabled={saving || restoreBusy || loadingChapter} value={content} onChange={e => { setContent(e.target.value); rememberDraft(e.target.value, title) }} placeholder="从这里开始写正文，或导入已有章节…" aria-label="章节正文" />
           </div>
         </div>
         : <div ref={readScrollRef} onScroll={recordPosition} className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-          <article className="mx-auto max-w-measure px-6 py-8">
+          <article className="reader-manuscript mx-auto">
             <MetaText>第 {currentChapter.chapter_number} 章</MetaText>
-            <h1 className="mt-1 font-serif text-2xl font-bold text-ink">{currentChapter.title}</h1>
+            <div className="mt-1 flex items-start gap-2">
+              <h1 className="min-w-0 break-words font-serif text-2xl font-bold text-ink">{currentChapter.title}</h1>
+              <CopyButton key={currentChapter.id} label="章节标题" text={currentChapter.title.replace(/^\s*第[^章]{1,12}章\s*/, '').trim()} className="mt-1" />
+            </div>
             <TextContent label="正文内容" className="mt-6 paper-text" style={{ fontSize: prefs.readerFontSize }} text={currentChapter.current_content || '本章还没有正文。切换到「编辑」开始写作。'} />
           </article>
         </div>
@@ -358,9 +388,9 @@ export function ReaderPage() {
     </div>
 
     {/* 右栏：本章梗概与版本历史 */}
-    {showContext && currentChapter && <aside className="absolute inset-y-0 right-0 z-20 flex w-72 max-w-full shrink-0 flex-col overflow-y-auto border-l border-line bg-paper-raised shadow-pop scrollbar-thin xl:static xl:shadow-none" aria-label="章节历史与管理">
-      <div className="space-y-4 p-3.5"><Button size="sm" variant="ghost" onClick={prefs.toggleReaderContext}>关闭侧栏</Button>
-        {currentBook && <ChapterPlanPanel bookId={currentBook.id} chapterId={currentChapter.id} versionId={currentChapter.current_version_id ?? null} />}
+    {showContext && currentChapter && <aside className="reader-context z-20 flex max-w-full shrink-0 flex-col overflow-y-auto border-l border-line bg-paper-raised scrollbar-thin" aria-label="章节历史与管理">
+      <div className="space-y-3 p-3"><Button size="sm" variant="ghost" onClick={toggleContext}>关闭侧栏</Button>
+        {currentBook && <ChapterPlanPanel bookId={currentBook.id} chapterId={currentChapter.id} versionId={currentChapter.current_version_id ?? null} chapter={currentChapter} disabled={dirty || saving || loadingChapter || reviewBusy || writingBusy} onConfirmed={updated => {if (useAppStore.getState().currentChapter?.id === updated.id) setCurrentChapter(updated); setChapters(useAppStore.getState().chapters.map(c => c.id === updated.id ? updated : c))}} />}
         <Panel title="本章梗概">
           {currentChapter.summary_is_stale && <Badge tone="warn">正文已变化，建议重新生成</Badge>}
           <TextContent label="本章梗概内容" className="mt-2 text-body leading-7 text-ink-soft" text={currentChapter.summary || '尚未生成梗概。点击上方“生成本章梗概”，使用 LLM 整理本章内容。'} />
@@ -371,22 +401,23 @@ export function ReaderPage() {
           <div className="space-y-1.5">
             {versions.map(version => {
               const isCurrent = version.id === currentChapter.current_version_id
-              return <div key={version.id} className={`rounded-md border px-3 py-2 ${isCurrent ? 'border-accent-200 bg-accent-50/60' : 'border-line-soft'}`}>
+              return <div key={version.id} className={`version-row rounded-md border px-2.5 py-2 ${isCurrent ? 'border-accent-200 bg-accent-50/60' : 'border-line-soft'}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-body font-medium text-ink">v{version.version_number}{isCurrent && <Badge tone="accent">当前</Badge>}</span>
+                  <span className="inline-flex items-center gap-1.5 text-body font-medium text-ink">v{version.version_number}{isCurrent && <Badge tone="accent">当前</Badge>}<span className="text-meta font-normal text-ink-faint">{version.word_count.toLocaleString()}字</span></span>
                   <span className="text-meta text-ink-faint">{versionSourceLabel[version.source] || version.source}</span>
                 </div>
-                <MetaText className="mt-0.5">{version.word_count.toLocaleString()} 字 · {new Date(version.created_at).toLocaleString()}</MetaText>
-                {version.note && <TextContent label="版本备注" className="mt-0.5 text-meta text-ink-faint" text={version.note} />}
-                <Button size="sm" variant="ghost" onClick={async () => { try { const result = await api<{ left: { content: string } }>(`/chapters/${version.chapter_id}/diff?left=${version.id}&right=${version.id}`); setHistoryPreview({ number: version.version_number, content: result.left.content }) } catch (exc) { setError(String(exc)) } }}>查看 v{version.version_number}</Button>
-                {!isCurrent && <Button size="sm" variant="ghost" className="mt-1 px-1.5 text-accent-700" disabled={dirty || saving || loadingChapter} onClick={() => setRestoring(version)}><RotateCcw size={12} />恢复到此版本</Button>}
+                <div className="mt-1 flex flex-wrap items-center gap-1"><span className="mr-auto text-meta text-ink-faint" title={new Date(version.created_at).toLocaleString()}>{new Date(version.created_at).toLocaleString(undefined, {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}</span>
+                <Button size="sm" variant="ghost" aria-label={`查看 v${version.version_number}`} onClick={async () => { try { const result = await api<{ left: { content: string } }>(`/chapters/${version.chapter_id}/diff?left=${version.id}&right=${version.id}`); setHistoryPreview({ number: version.version_number, content: result.left.content }) } catch (exc) { setError(String(exc)) } }}>查看</Button>
+                {!isCurrent && <Button size="sm" variant="ghost" className="px-1.5 text-accent-700" disabled={dirty || saving || loadingChapter || reviewBusy} onClick={() => setRestoring(version)}><RotateCcw size={12} />恢复</Button>}
+                </div>
+                {version.note && version.note !== '阅读器手动保存' && <details className="mt-0.5 text-meta text-ink-faint"><summary className="cursor-pointer truncate" title={version.note}>来源备注</summary><TextContent label="版本备注" className="mt-1 break-all" text={version.note} /></details>}
               </div>
             })}
           </div>
         </Panel>
 
         <Panel title="章节管理">
-          <MetaText>状态：{currentChapter.status === 'draft' ? '草稿' : currentChapter.status} · 最近更新 {new Date(currentChapter.updated_at).toLocaleString()}</MetaText>
+          <MetaText>状态：{currentChapter.status === 'approved' ? '正式稿' : '草稿'} · 最近更新 {new Date(currentChapter.updated_at).toLocaleString()}</MetaText>
           <Button size="sm" variant="danger" className="mt-3" onClick={() => setDeleting(true)}><Trash2 size={13} />删除本章</Button>
         </Panel>
       </div>

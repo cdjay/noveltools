@@ -5,6 +5,7 @@ const api = 'http://127.0.0.1:19518/api'
 test('正文工具栏选择章数、启动、停止、继续和刷新任务，保留编辑草稿', async ({ page, request }, testInfo) => {
   const book = await (await request.post(`${api}/books`, { data: { title: '持续生成验收' } })).json()
   await request.post(`${api}/books/${book.id}/chapters`, { data: { title: '已有章节', content: '已有正文' } })
+  await page.route(`**/books/${book.id}/writing-jobs/options`, route => route.fulfill({ json: { start_chapter: 2, plans: [2, 3, 4].map(n => ({ id: `p${n}`, position: n, title: `计划${n}`, confirmed: true, has_body: false })) } }))
   let job: any = null
   let starts = 0
   let summaryReady = false
@@ -15,7 +16,7 @@ test('正文工具栏选择章数、启动、停止、继续和刷新任务，�
   })
   await page.route(`**/books/${book.id}/writing-jobs/latest`, route => route.fulfill({ json: job }))
   await page.route(`**/books/${book.id}/writing-jobs`, async route => {
-    expect(route.request().postDataJSON()).toEqual({ chapter_count: 3 })
+    expect(route.request().postDataJSON()).toEqual({ mode: 'count', chapter_count: 3, review_limit: 3, auto_revise: true })
     starts++
     job = { id: 501, status: 'running', step: 'summaries', message: '正在补齐梗概', target_count: 3, completed_count: 0, saved_count: 0, model: 'gemini-test', items: [] }
     await route.fulfill({ json: job })
@@ -34,8 +35,8 @@ test('正文工具栏选择章数、启动、停止、继续和刷新任务，�
   try {
     await page.setViewportSize({ width: 1500, height: 1000 })
     await page.goto(`/books/${book.id}/reader`)
-    const start = page.getByRole('button', { name: '开始生成正文', exact: true })
-    const count = page.getByRole('combobox', { name: '持续生成章数', exact: true })
+    const start = page.getByRole('button', { name: '开始生成正文', exact: true, includeHidden: true })
+    const count = page.getByRole('spinbutton', { name: '持续生成章数', exact: true })
     const floating = page.getByRole('region', { name: '持续生成正文浮窗', exact: true })
     const trigger = page.getByRole('button', { name: '持续生成正文', exact: true })
     const toolbar = page.getByRole('button', { name: '切换章节列表' }).locator('..')
@@ -45,7 +46,7 @@ test('正文工具栏选择章数、启动、停止、继续和刷新任务，�
     const initial = (await floating.boundingBox())!
     expect(Math.round(initial.x + initial.width)).toBe(1480)
     expect(Math.round(initial.y + initial.height)).toBe(980)
-    expect(await count.locator('option').allTextContents()).toEqual(['1 章', '3 章', '5 章', '10 章', '20 章', '30 章', '50 章', '100 章'])
+    await expect(page.getByRole('combobox', { name: '每章最多完整审核' })).toHaveValue('3')
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await page.getByRole('button', { name: '编辑', exact: true }).click()
     const body = page.getByRole('textbox', { name: '章节正文', exact: true })
@@ -54,7 +55,7 @@ test('正文工具栏选择章数、启动、停止、继续和刷新任务，�
     await expect(start).toBeDisabled()
     await body.fill('已有正文')
     await trigger.click()
-    await count.selectOption('3')
+    await count.fill('3')
     await start.click()
     await expect(start).toBeDisabled()
     await expect(page.getByLabel('正文生成进度')).toContainText('补齐梗概')
@@ -90,7 +91,7 @@ test('正文工具栏选择章数、启动、停止、继续和刷新任务，�
     await expect(floating.getByRole('progressbar')).toBeVisible()
     await page.screenshot({ path: testInfo.outputPath('writing-collapsed.png'), fullPage: true })
     await page.getByRole('button', { name: '展开生成浮窗' }).click()
-    await expect(start).toBeVisible()
+    await expect(page.getByLabel('正文生成进度')).toBeVisible()
     // Dragging stays inside the viewport, and a smaller viewport keeps controls reachable.
     const header = floating.locator('header')
     const bounds = (await header.boundingBox())!
@@ -123,5 +124,39 @@ test('正文工具栏选择章数、启动、停止、继续和刷新任务，�
     await expect(page.getByRole('region', { name: '步骤日志', exact: true })).toContainText('HTTP 502')
     await page.getByRole('button', { name: '收起生成浮窗' }).click()
     await expect(floating.getByText('更新速查 · 模型接口返回 HTTP 502，请检查 LLM 配置。', { exact: true })).toBeVisible()
+  } finally { await request.delete(`${api}/books/${book.id}`).catch(() => undefined) }
+})
+
+
+test('按剧情生成到第20章，默认动态审核三次并恢复服务器日志', async ({ page, request }, testInfo) => {
+  const book = await (await request.post(`${api}/books`, { data: { title: '剧情自动推进' } })).json()
+  for (let n = 1; n <= 4; n++) await request.post(`${api}/books/${book.id}/chapters`, { data: { title: `已有章节${n}`, content: `正文${n}` } })
+  let job: any = null
+  await page.route(`**/books/${book.id}/writing-jobs/options`, route => route.fulfill({ json: { start_chapter: 5, plans: Array.from({ length: 16 }, (_, i) => ({ id: `stable-${i + 5}`, position: i + 5, title: `剧情目标${i + 5}`, confirmed: true, has_body: false })) } }))
+  await page.route(`**/books/${book.id}/writing-jobs/latest`, route => route.fulfill({ json: job }))
+  await page.route(`**/books/${book.id}/writing-jobs`, route => {
+    expect(route.request().postDataJSON()).toEqual({ mode: 'through_plan', target_plan_id: 'stable-20', review_limit: 3, auto_revise: true })
+    job = { id: 900, engine: 'canvas-v1', status: 'paused', step: 'paused', message: '第5章需要作者处理剧情冲突', start_chapter: 5, end_chapter: 20, target_count: 16, saved_count: 1, completed_count: 0, review_limit: 3,
+      workflows: { generate: { id: 'saved-generate', name: '生成正文' }, review: { id: 'saved-review', name: '正文审核' }, revision: { id: 'saved-revision', name: '正文修订' } },
+      logs: [{ id: 1, time: new Date().toISOString(), text: '第5章第1次审核，发现需要作者裁定的问题。' }], items: [] }
+    return route.fulfill({ json: job })
+  })
+  try {
+    await page.setViewportSize({ width: 1500, height: 1000 })
+    await page.goto(`/books/${book.id}/reader`)
+    await page.getByRole('button', { name: '持续生成正文', exact: true }).click()
+    await page.getByRole('combobox', { name: '生成范围', exact: true }).selectOption('through_plan')
+    await page.getByRole('combobox', { name: '结束章纲', exact: true }).selectOption('stable-20')
+    await expect(page.getByText('将生成第 5—20 章，共 16 章（包含结束章纲）。', { exact: true })).toBeVisible()
+    await expect(page.getByRole('combobox', { name: '每章最多完整审核', exact: true })).toHaveValue('3')
+    await page.screenshot({ path: testInfo.outputPath('through-plan-setup.png'), fullPage: true })
+    await page.getByRole('button', { name: '开始生成正文', exact: true }).click()
+    await expect(page.getByRole('button', { name: '处理后继续', exact: true })).toBeVisible()
+    await expect(page.getByText('正文工作流：生成正文', { exact: true })).toBeVisible()
+    await expect(page.getByRole('region', { name: '步骤日志' })).toContainText('第1次审核')
+    await page.reload()
+    await page.getByRole('button', { name: '持续生成正文', exact: true }).click()
+    await expect(page.getByRole('region', { name: '步骤日志' })).toContainText('第1次审核')
+    await page.screenshot({ path: testInfo.outputPath('continuous-paused.png'), fullPage: true })
   } finally { await request.delete(`${api}/books/${book.id}`).catch(() => undefined) }
 })

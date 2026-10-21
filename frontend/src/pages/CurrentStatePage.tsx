@@ -123,13 +123,14 @@ export function CurrentStatePage() {
   const running = generating || !!current?.generating
   if (loading) return <Loading text="正在读取当前状态速查…" />
   return <div className="mx-auto max-w-7xl p-5 lg:p-7">
-    <PageHeader title="当前状态速查" description="按本书最新已保存大纲全文、最后 5 章正文、全部已有章节梗概与选定写作规则整理，生成后自动保存历史，可继续手动编辑。" actions={<>
+    <PageHeader title="当前状态速查" description="这里展示全书最新状态；正文工作流会按目标章截断前文，并为每次生成另存冻结快照，不会把后续章节带入前文条件。" actions={<>
       <Button variant="ghost" disabled={busy || running} onClick={() => setSettingsOpen(true)}><Settings2 size={14} />页面设置</Button>
       <Button variant="secondary" disabled={!current || busy || running || !dirty} onClick={() => void save()}><Save size={14} />保存修改</Button>
       <Button variant="primary" disabled={!current || busy || running || dirty || promptDirty || !context?.body_chapters.length} title={dirty ? '请先保存或放弃速查修改' : '使用已保存提示词与速查分流模型生成'} onClick={() => void generate()}><Sparkles size={14} />{running ? '正在生成…' : '生成当前状态速查'}</Button>
     </>} />
     {error && <div className="mt-4"><InlineError message={error} /></div>}
     <div className="my-4 rounded-md border border-line-soft bg-paper-raised px-4 py-3 text-meta leading-6 text-ink-soft">
+      <div className="text-accent-700">页面当前版本是全书最新速查（当前正文范围会显示到最新已保存章节）；生成第N章时，工作流使用“仅截至第N-1章”的专属快照。</div>
       <div>正文范围：{context?.body_chapters.map(c => `第 ${c.chapter_number} 章`).join('、') || '暂无章节'} · 梗概 {context?.summary_count || 0} / {context?.chapter_count || 0} 章 · 输入约 {context?.input_characters.toLocaleString() || 0} 字符</div>
       <div>大纲：{context?.outline ? `已纳入 v${context.outline.version_number} 全文 · ${context.outline.characters.toLocaleString()} 字符${context.outline.is_empty ? "（内容为空）" : ""}` : "尚未保存，将按现有正文与梗概整理"}。大纲中的未来剧情仅作规划参考。</div>
       <div>写作规则：{context?.writing_rules?.map(rule => `${rule.title} v${rule.version_number}`).join('、') || '尚未选择，可在页面设置中选择本书资料'}。正文生成也会完整使用这些规则。</div>

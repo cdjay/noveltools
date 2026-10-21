@@ -58,8 +58,8 @@ export default {
         mono: ['"SFMono-Regular"', 'Consolas', '"Liberation Mono"', 'Menlo', 'monospace'],
       },
       fontSize: {
-        meta: ['12px', { lineHeight: '1.5' }],
-        body: ['14px', { lineHeight: '1.65' }],
+        meta: ['0.75rem', { lineHeight: '1.5' }],
+        body: ['0.875rem', { lineHeight: '1.65' }],
       },
       borderRadius: {
         sm: '6px',

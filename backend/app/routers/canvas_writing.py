@@ -1,6 +1,7 @@
 """Run the editable AI canvas, then atomically save its designated prose output."""
 import asyncio
 import json
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
@@ -40,8 +41,11 @@ async def canvas(method, path, **kwargs):
 
 
 def job_out(j):
+    if not j:
+        return None
     return {key: getattr(j, key) for key in ('id', 'book_id', 'chapter_id', 'status', 'message',
-        'workflow_id', 'run_id', 'saved_version_id', 'created_at', 'updated_at')} | {'has_output': bool(j.raw_output), 'node_progress': j.config.get('node_progress', [])}
+        'workflow_id', 'run_id', 'saved_version_id', 'created_at', 'updated_at')} | {'has_output': bool(j.raw_output), 'node_progress': j.config.get('node_progress', []), 'logs': j.config.get('logs', []),
+        'snapshot': j.source.get('snapshot', {}) if isinstance(j.source, dict) else {}}
 
 
 def require_job(db, job_id):
@@ -56,8 +60,6 @@ def bound_plan(db, chapter):
     if not p:
         raise HTTPException(409, "当前正文尚未绑定章纲，请先在章纲页手动绑定。")
     v = db.get(ChapterPlanVersion, p.current_version_id)
-    if v.status != 'confirmed':
-        raise HTTPException(409, "绑定的章纲尚未确认，请先保存为已确认。")
     return p, v
 
 
@@ -90,12 +92,13 @@ def sources(db, j):
 
 TEXT_PORTS = {
     'text': ['text'], 'llm': ['text'], 'material-context': ['text'],
+    'revision-apply': ['text', 'report'],
     'chapter-context': ['text', 'bookInfo', 'chapterTitle', 'previousText', 'bodyText',
                         'summaryText', 'outlineText', 'planText', 'stateText'],
 }
 
 
-def validate_graph(graph, book_id, output_node_id='final-prose', output_port='text'):
+def validate_graph(graph, book_id, output_node_id='final-prose', output_port='text', *, reader_required=True, gemini_only=True):
     nodes = {n['id']: n for n in graph['nodes'] if n.get('enabled') is not False}
     out = nodes.get(output_node_id)
     if not out or output_port not in TEXT_PORTS.get(out['type'], []):
@@ -105,8 +108,8 @@ def validate_graph(graph, book_id, output_node_id='final-prose', output_port='te
     keys, input_nodes = [], []
     for n in nodes.values():
         if n['type'] not in TEXT_PORTS:
-            raise HTTPException(409, '正文工作流支持书籍提取、知识库、文本拼装与语言模型节点。')
-        if n['type'] == 'llm' and not str(n['inputs'].get('model', '')).lower().startswith('gemini'):
+            raise HTTPException(409, f"工作流节点「{n.get('label') or n['id']}」类型 {n['type']} 暂不支持，任务尚未启动。")
+        if gemini_only and n['type'] == 'llm' and not str(n['inputs'].get('model', '')).lower().startswith('gemini'):
             raise HTTPException(409, '正文流程固定使用 Gemini，不会切换备用模型。')
         if n['type'] in ('chapter-context', 'material-context'):
             input_nodes.append(n['id'])
@@ -117,6 +120,11 @@ def validate_graph(graph, book_id, output_node_id='final-prose', output_port='te
             if not isinstance(selected, list) or not selected or any(not isinstance(k, str) for k in selected) or len(set(selected)) != len(selected):
                 raise HTTPException(409, '请在知识库节点选择有效资料。')
             keys.extend(k for k in selected if k not in keys)
+    unchecked = [n for n in nodes.values() if n['id'] in input_nodes and
+                 not (n['inputs'].get('requireReader') is True or n['inputs'].get('sourceRequestId') == 'from-reader')]
+    if reader_required and unchecked:
+        names = '、'.join(f"「{n.get('label') or n['id']}」（{n['id']}）" for n in unchecked)
+        raise HTTPException(409, f'请在工作流的 {names} 勾选“仅从正文页传入”并保存，再从正文页生成。任务尚未启动。')
     return {'material_keys': keys, 'input_nodes': input_nodes, 'output_node_id': output_node_id,
             'output_port': output_port, 'node_labels': {n['id']: n.get('label', n['id']) for n in nodes.values()}}
 
@@ -196,7 +204,15 @@ def standalone_context(book_id: int, chapter_number: int, db: Session = Depends(
         .order_by(CurrentStateVersion.version_number.desc())) if v.source_manifest == manifest and v.content.strip()), None)
     state_text = state.content if state else ('开篇基准：无前文，所有计划尚未发生。' if not ctx['recent_chapters'] else
         '暂无与本章前文匹配的最新速查；请先更新前文梗概与速查，或从正文页调用以自动补齐。不能将旧版或未来事件当作事实。')
-    return {'planText': plan_text, 'stateText': state_text}
+    previous_text = '\n\n'.join(f"第{x['chapter_number']}章 {x['title']}\n{x['content']}" for x in ctx['recent_chapters']) or '无前文（第一章）'
+    summary_text = '\n\n'.join(f"第{x['chapter_number']}章 {x['title']}\n{x['summary']}" for x in ctx['all_summaries']) or '无前文梗概（第一章）'
+    outline_text = ctx['outline']['content'] if ctx['outline'] else '暂无已保存大纲'
+    current_body = read_content(db.get(ChapterVersion, c.current_version_id)).strip() if c and c.current_version_id else ''
+    return {'bookInfo': f"书名：{ctx['book_title']}\n本次仅准备第{chapter_number}章",
+            'chapterTitle': v.title if v else f'第{chapter_number}章', 'previousText': previous_text,
+            'bodyText': current_body or '本章暂无正文（待生成）', 'summaryText': summary_text, 'outlineText': outline_text,
+            'planText': plan_text, 'stateText': state_text,
+            'stateVersionId': state.id if state else None, 'stateManifest': manifest}
 
 
 class Start(BaseModel):
@@ -206,29 +222,48 @@ class Start(BaseModel):
 
 @router.post('/chapters/{chapter_id}/workflow-writing')
 async def start(chapter_id: int, payload: Start, db: Session = Depends(get_db)):
+    return await start_job(chapter_id, payload, db)
+
+
+async def start_job(chapter_id, payload, db, *, frozen=None, owner_id=None, commit=True):
     c = db.get(Chapter, chapter_id)
     if not c:
         raise HTTPException(404, "章节不存在")
-    selected_workflow = get_workflow_settings(c.book_id, db)
-    try:
-        response = await canvas('GET', f"/workflows/{selected_workflow['workflow_id']}")
-    except (ValueError, httpx.RequestError) as exc:
-        raise HTTPException(502, str(exc)) from exc
-    config = validate_graph(response.json(), c.book_id, selected_workflow['output_node_id'], selected_workflow['output_port'])
+    selected_workflow = frozen or get_workflow_settings(c.book_id, db)
+    if frozen:
+        config = dict(frozen['config'])
+        etag = frozen['etag']
+    else:
+        try:
+            response = await canvas('GET', f"/workflows/{selected_workflow['workflow_id']}")
+        except (ValueError, httpx.RequestError) as exc:
+            raise HTTPException(502, str(exc)) from exc
+        config = validate_graph(response.json(), c.book_id, selected_workflow['output_node_id'], selected_workflow['output_port'])
+        etag = response.headers['etag']
     chapter_plans.lock(db, c.book_id)
     c = db.get(Chapter, chapter_id)
     if c.current_version_id != payload.base_version_id:
         raise HTTPException(409, "正文已更新，请重新载入。")
     if c.word_count and not payload.replace_existing:
         raise HTTPException(409, "已有正文，请明确选择生成新版本；原版本会保留。")
+    from ..models import PlanWritingJob
+    if db.scalar(select(PlanWritingJob.id).where(PlanWritingJob.book_id == c.book_id, PlanWritingJob.status.in_(('queued', 'submitting', 'running', 'stopping')))):
+        raise HTTPException(409, '本书正在续写章纲，请等待完成')
     if db.scalar(select(CanvasWritingJob.id).where(CanvasWritingJob.book_id == c.book_id, CanvasWritingJob.status.in_(ACTIVE))) or db.scalar(
-        select(WritingJob.id).where(WritingJob.book_id == c.book_id, WritingJob.status.in_(['queued', 'running', 'cancelling']))):
+        select(WritingJob.id).where(WritingJob.book_id == c.book_id, WritingJob.status.in_(['queued', 'running', 'cancelling']), WritingJob.id != (owner_id or -1))):
         raise HTTPException(409, "本书已有正文任务运行，请等待完成。")
+    if owner_id:
+        config['continuous_job_id'] = owner_id
     j = CanvasWritingJob(id=uuid4().hex, book_id=c.book_id, chapter_id=c.id, base_version_id=c.current_version_id,
-        workflow_id=selected_workflow['workflow_id'], workflow_etag=response.headers['etag'], config=config,
+        workflow_id=selected_workflow['workflow_id'], workflow_etag=etag, config=config,
         status='queued', source={}, manifest={}, raw_output='')
     sources(db, j)  # Validate before creating a task or spending model tokens.
-    db.add(j); db.commit()
+    db.add(j)
+    j.message = '任务已创建，等待准备资料'
+    append_log(j, j.message, 'queued')
+    db.flush()
+    if commit:
+        db.commit()
     return job_out(j)
 
 
@@ -236,6 +271,21 @@ async def start(chapter_id: int, payload: Start, db: Session = Depends(get_db)):
 def latest_job(book_id: int, db: Session = Depends(get_db)):
     j = db.scalar(select(CanvasWritingJob).where(CanvasWritingJob.book_id == book_id).order_by(CanvasWritingJob.created_at.desc()))
     return job_out(j) if j else None
+
+
+@router.get('/chapters/{chapter_id}/workflow-writing/snapshots')
+def chapter_snapshots(chapter_id: int, db: Session = Depends(get_db)):
+    """List durable frozen inputs kept for this chapter's generation history."""
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(404, '章节不存在')
+    jobs = db.scalars(select(CanvasWritingJob).where(CanvasWritingJob.chapter_id == chapter_id)
+                      .order_by(CanvasWritingJob.created_at.desc())).all()
+    return [{'id': j.id, 'status': j.status, 'created_at': j.created_at.isoformat(),
+             'updated_at': j.updated_at.isoformat(), 'base_version_id': j.base_version_id,
+             'saved_version_id': j.saved_version_id, 'workflow_id': j.workflow_id,
+             'snapshot': j.source.get('snapshot', {}) if isinstance(j.source, dict) else {},
+             'has_source': bool(j.source), 'manifest': j.manifest} for j in jobs]
 
 
 @router.get('/workflow-writing/jobs/{job_id}')
@@ -260,15 +310,24 @@ def frozen_source(job_id: str, db: Session = Depends(get_db)):
 async def cancel(job_id: str, db: Session = Depends(get_db)):
     j = require_job(db, job_id)
     if j.status in ACTIVE:
-        j.status, j.message = 'cancelled', '已停止；已保存正文和历史版本保留。'
-        db.commit()
+        mark(db, j, 'cancelled', '已停止；已保存正文和历史版本保留。')
         if j.run_id:
             await canvas('POST', f'/runs/{j.run_id}/cancel')
     return job_out(j)
 
 
+def append_log(j, text, key):
+    logs = j.config.get('logs', [])
+    if logs and logs[-1].get('key') == key:
+        return
+    entry = {'id': logs[-1]['id'] + 1 if logs else 1,
+             'time': datetime.now(timezone.utc).isoformat(), 'text': text, 'key': key}
+    j.config = {**j.config, 'logs': [*logs, entry][-100:]}
+
+
 def mark(db, j, status, message):
     j.status, j.message = status, message
+    append_log(j, message, f'{status}:{message}')
     db.commit()
 
 
@@ -277,25 +336,35 @@ async def prepare(db, j):
     missing = ctx['missing_summary_chapter_ids'] + ctx['stale_summary_chapter_ids']
     if missing:
         mark(db, j, 'preparing', '正在补齐前文梗概')
-        result = await update_summary(missing[0], db)
+        saved_chain = j.config.get('continuous_memory', {}).get('batch_summary')
+        result = await update_summary(missing[0], db, **({'config': {'_chain': saved_chain}} if saved_chain else {}))
         if not result.updated:
             raise ValueError(result.message)
         return
     if not ctx['outline'] or not ctx['outline']['content'].strip():
         raise ValueError('大纲为空，请先保存全书大纲。')
+    c = db.get(Chapter, j.chapter_id)
+    if not c:
+        raise ValueError('目标章节不存在，无法准备正文资料。')
     mark(db, j, 'preparing', '正在核对并整理本章开始前的状态')
     state_text = '开篇基准：本书尚无前文，全部章纲和大纲事件均为未来计划。按前置设定的开篇状态写作。'
+    state_version_id = None
     # State provenance covers only preceding chapters, never the draft being generated.
-    state_manifest = {k: value for k, value in manifest.items() if k not in ('target', 'plan', 'guidance', 'materials')}
+    # `sources()` adds target/plan/material details for the prose job.  The
+    # current-state generator owns a separate, chapter-scoped manifest; use
+    # the same raw manifest as the state page so a saved state can be matched
+    # again by the reader and by a later rewrite.
+    state_manifest, _ = current_state.snapshot(db, j.book_id, before_chapter_number=c.chapter_number)
     saved_state = next((s for s in db.scalars(select(CurrentStateVersion).where(
         CurrentStateVersion.book_id == j.book_id).order_by(CurrentStateVersion.version_number.desc()))
         if s.source_manifest == state_manifest and s.content.strip()), None)
     if saved_state:
         state_text = saved_state.content
+        state_version_id = saved_state.id
     elif ctx['recent_chapters']:
         previous_state = current_state.latest(db, j.book_id)
         state_base = previous_state.id if previous_state else None
-        chain = snapshot_chain(db, 'current_state')
+        chain = j.config.get('continuous_memory', {}).get('current_state') or snapshot_chain(db, 'current_state')
         prompt = current_state.get_settings(j.book_id, db)['prompt'] + '\n\n' + current_state.OUTLINE_GUIDANCE
         state_text, actual = await run_with_fallback(chain, 'current_state', lambda provider: current_state.call_model(provider, prompt, ctx))
         current_state.lock_book(db, j.book_id)
@@ -303,22 +372,26 @@ async def prepare(db, j):
             return
         if sources(db, j)[0] != manifest:
             raise HTTPException(409, '整理速查期间来源已变化，请核对后重试。')
-        current_state.append(db, j.book_id, state_base, state_text, state_manifest,
+        saved = current_state.append(db, j.book_id, state_base, state_text, state_manifest,
             source='llm', model=actual.model, prompt=prompt,
             note=f'正文工作流前置整理：仅截至第{db.get(Chapter, j.chapter_id).chapter_number - 1}章，不包含本次待生成正文')
+        state_version_id = saved.get('id') if isinstance(saved, dict) else None
     db.expire_all()
     if j.status == 'cancelled':
         return
     if sources(db, j)[0] != manifest:
         raise HTTPException(409, '准备资料期间来源已变化，请核对后重试。')
     c = db.get(Chapter, j.chapter_id)
-    body_text = '\n\n'.join(f"第{x['chapter_number']}章 {x['title']}\n{x['content']}" for x in ctx['recent_chapters']) or '无前文（第一章）'
+    target_body = read_content(db.get(ChapterVersion, c.current_version_id)).strip() if c.current_version_id else ''
+    body_text = target_body or '本章暂无正文（待生成）'
+    previous_text = '\n\n'.join(f"第{x['chapter_number']}章 {x['title']}\n{x['content']}" for x in ctx['recent_chapters']) or '无前文（第一章）'
     summary_text = '\n\n'.join(f"第{x['chapter_number']}章 {x['title']}\n{x['summary']}" for x in ctx['all_summaries']) or '无前文梗概（第一章）'
     guidance = chapter_plans.guidance(db, j.book_id)
     plan_text = f"第{c.chapter_number}章 {v.title}\n所属卷：{v.volume}\n{v.content}\n\n共同执行说明：\n" + (guidance['content'] if guidance else '无')
-    j.source = {'book_id': j.book_id, 'materials': selected, 'bookOutputs': {
+    j.source = {'book_id': j.book_id, 'snapshot': {'chapter_number': c.chapter_number,
+        'state_version_id': state_version_id, 'state_scope': f'仅截至第{c.chapter_number - 1}章'}, 'materials': selected, 'bookOutputs': {
         'text': f'{plan_text}\n\n{state_text}', 'bookInfo': f"书名：{ctx['book_title']}\n本次仅生成第{c.chapter_number}章",
-        'chapterTitle': v.title, 'previousText': body_text, 'bodyText': body_text, 'summaryText': summary_text,
+        'chapterTitle': v.title, 'previousText': previous_text, 'bodyText': body_text, 'summaryText': summary_text,
         'outlineText': ctx['outline']['content'], 'planText': plan_text, 'stateText': state_text}}
     j.manifest = manifest
     mark(db, j, 'submitting', '资料已冻结，正在调用生成正文画布')
@@ -349,19 +422,38 @@ def save_output(db, j, raw):
         note=f'画布 {j.workflow_id}，运行 {j.run_id}，章纲版本 {p.current_version_id}')
     db.add(version); db.flush()
     c.current_version_id, c.word_count, c.title = version.id, version.word_count, title
+    c.status = 'draft'
     db.add(ChapterPlanUse(plan_version_id=p.current_version_id, chapter_version_id=version.id))
     j.saved_version_id = version.id
     mark(db, j, 'completed', '正文已保存，待审阅修改；下次生成前再更新梗概与速查。')
 
 
 async def tick(job_id):
+    from ..llm_failover import writing_job_context
+    with SessionLocal() as db:
+        owner = require_job(db, job_id).config.get('continuous_job_id')
+    token = writing_job_context.set(owner)
+    try:
+        await _tick(job_id)
+    finally:
+        writing_job_context.reset(token)
+
+
+async def _tick(job_id):
     with SessionLocal() as db:
         j = require_job(db, job_id)
+        if j.config.get('continuous_job_id') and j.status in ('queued', 'preparing'):
+            parent = db.get(WritingJob, j.config['continuous_job_id'])
+            if not parent or parent.status != 'running':
+                return
+        if j.config.get('kind') in ('review', 'revision'):
+            from .chapter_review import tick_review
+            await tick_review(db, j)
+            return
         if j.status in ('queued', 'preparing'):
             from .writing_jobs import other_generation
             if other_generation(db, j.book_id):
-                j.message = '等待本书正在运行的梗概或速查任务完成'
-                db.commit()
+                mark(db, j, j.status, '等待本书正在运行的梗概或速查任务完成')
                 return
         if j.status in ('queued', 'preparing'):
             await prepare(db, j)
@@ -370,12 +462,20 @@ async def tick(job_id):
             db.expire_all()
             if j.status != 'running':
                 return
-            progress = [{'label': j.config.get('node_labels', {}).get(n['nodeId'], n['nodeId']), 'status': n['status']} for n in run['nodes']]
+            progress = [{'node_id': n['nodeId'], 'label': j.config.get('node_labels', {}).get(n['nodeId'], n['nodeId']), 'status': n['status']} for n in run['nodes']]
             if progress != j.config.get('node_progress'):
+                previous = {n.get('node_id'): n['status'] for n in j.config.get('node_progress', [])}
+                labels = {'SUCCEEDED': '完成', 'RUNNING': '运行中', 'PENDING': '等待', 'READY': '就绪',
+                          'FAILED': '失败', 'CANCELLED': '停止', 'WAITING': '等待返回'}
+                for n in progress:
+                    if previous.get(n['node_id']) != n['status']:
+                        append_log(j, f"{n['label']} · {labels.get(n['status'], n['status'])}", f"node:{n['node_id']}:{n['status']}")
                 j.config = {**j.config, 'node_progress': progress}
                 j.message = '画布运行中：' + ('、'.join(x['label'] for x in progress if x['status'] in ('RUNNING', 'WAITING')) or '等待下一节点')
                 db.commit()
             if run['status'] in ('FAILED', 'CANCELLED'):
+                j.config = {**j.config, 'remote_terminal': True}
+                db.commit()
                 errors = [n.get('error', {}).get('message', '') for n in run['nodes'] if n.get('error')]
                 raise ValueError('画布执行未完成：' + '；'.join(errors))
             if run['status'] == 'SUCCEEDED':
@@ -392,6 +492,7 @@ async def tick(job_id):
 def recover_interrupted():
     with SessionLocal() as db:
         for j in db.scalars(select(CanvasWritingJob).where(CanvasWritingJob.status == 'submitting')):
+            j.config = {**j.config, 'submission_uncertain': True}
             mark(db, j, 'failed', '画布提交结果未确认。请先查看画布运行记录，避免重复调用模型。')
 
 
@@ -409,9 +510,10 @@ async def worker():
                     j = db.get(CanvasWritingJob, job_id)
                     if j and j.status != 'cancelled':
                         if isinstance(exc, CanvasUnavailable) and j.status == 'running':
-                            j.message = '暂时无法读取画布进度，将重新查询原运行；不会重复调用模型。'
-                            db.commit()
+                            mark(db, j, j.status, '暂时无法读取画布进度，将重新查询原运行；不会重复调用模型。')
                             continue
+                        if j.status == 'submitting':
+                            j.config = {**j.config, 'submission_uncertain': True}
                         message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
                         mark(db, j, 'conflict' if isinstance(exc, HTTPException) and exc.status_code == 409 else 'failed', message[:2000])
         await asyncio.sleep(2)

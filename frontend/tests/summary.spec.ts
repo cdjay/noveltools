@@ -6,7 +6,7 @@ test('正文可手动生成和批量更新梗概，并保护未保存编辑', as
   const book = await (await request.post(`${api}/books`, { data: { title: '梗概界面验收' } })).json()
   try {
     const chapter = await (await request.post(`${api}/books/${book.id}/chapters`, { data: { title: '初见', content: '沈舟与旧友在城门重逢。' } })).json()
-    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.setViewportSize({ width: 1920, height: 1080 })
     await page.goto(`/books/${book.id}/reader`)
     let finish: (() => void) | undefined
     let called = false
@@ -34,6 +34,6 @@ test('正文可手动生成和批量更新梗概，并保护未保存编辑', as
     await expect(page.getByText('梗概更新：成功 0 章，跳过 1 章，失败 0 章')).toBeVisible()
     await page.unroute(`**/chapters/${chapter.id}/summary`)
     await page.getByRole('button', { name: '生成本章梗概', exact: true }).click()
-    await expect(page.getByRole('alert')).toContainText('LLM 配置')
+    await expect(page.getByRole('alert')).toContainText(/LLM 配置|设置可用的主模型/)
   } finally { await request.delete(`${api}/books/${book.id}`) }
 })

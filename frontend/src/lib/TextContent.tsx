@@ -13,10 +13,11 @@ export function FormatSwitch() {
 const RenderMarkdown = lazy(() => import('./MarkdownRenderer'))
 
 /** Text is never converted on save; this is a presentation-only preference. */
-export function TextContent({ text, label, className = '', style, copy = true }: { text: string; label: string; className?: string; style?: CSSProperties; copy?: boolean }) {
-  const format = useUiPrefs(state => state.textFormat)
+export function TextContent({ text, label, className = '', style, copy = true, copyText, format: override }: { text: string; label: string; className?: string; style?: CSSProperties; copy?: boolean; copyText?: string; format?: 'raw' | 'markdown' }) {
+  const preference = useUiPrefs(state => state.textFormat)
+  const format = override ?? preference
   return <div className={`relative min-w-0 ${className}`} style={style}>
-    {copy && <CopyButton text={text} label={label} className="absolute right-0 top-0 z-10 bg-paper-raised/90" />}
+    {copy && <CopyButton text={copyText ?? text} label={label} className="absolute right-0 top-0 z-10 bg-paper-raised/90" />}
     <div aria-label={label} className={`${format === 'markdown' ? 'markdown-text' : 'whitespace-pre-wrap break-words'} ${copy ? 'pr-8' : ''}`}>
       {format === 'markdown' ? <Suspense fallback={<span className="whitespace-pre-wrap">{text}</span>}><RenderMarkdown text={text} /></Suspense> : text}
     </div>

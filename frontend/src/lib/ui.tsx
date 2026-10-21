@@ -52,7 +52,7 @@ export function Select({ className = '', ...props }: SelectHTMLAttributes<HTMLSe
 export function Field({ label, hint, children, className = '' }: { label: string; hint?: string; children: ReactNode; className?: string }) {
   const id = useId()
   return <div className={`block text-body text-ink-soft ${className}`}>
-    <label htmlFor={id} className="mb-1.5 block text-[13px] font-medium">{label}</label>
+    <label htmlFor={id} className="mb-1.5 block text-[0.8125rem] font-medium">{label}</label>
     <FieldContext.Provider value={{ id, label }}>{children}</FieldContext.Provider>
     {hint && <span className="mt-1 block text-meta text-ink-faint">{hint}</span>}
   </div>
@@ -66,7 +66,7 @@ export function Panel({ title, description, action, children, className = '', bo
   return <section className={`rounded-lg border border-line bg-paper-raised shadow-card ${className}`}>
     {(title || action) && <header className="flex items-center justify-between gap-3 border-b border-line-soft px-4 py-3">
       <div className="min-w-0">
-        {title && <h2 className="truncate text-[15px] font-semibold text-ink">{title}</h2>}
+        {title && <h2 className="truncate text-[0.9375rem] font-semibold text-ink">{title}</h2>}
         {description && <p className="mt-0.5 text-meta text-ink-faint">{description}</p>}
       </div>
       {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
@@ -187,7 +187,7 @@ export function Modal({ open, onClose, title, description, children, footer, wid
       <div ref={boxRef} role="dialog" aria-modal="true" className={`flex max-h-[88vh] w-full ${width} flex-col rounded-lg bg-paper-raised shadow-pop anim-rise`}>
         <header className="flex items-start justify-between gap-4 border-b border-line-soft px-5 py-4">
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
+            <h2 className="text-[0.9375rem] font-semibold text-ink">{title}</h2>
             {description && <p className="mt-1 text-meta leading-5 text-ink-faint">{description}</p>}
           </div>
           <button aria-label="关闭" className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-paper-sunken hover:text-ink" onClick={onClose}><X size={17} /></button>
@@ -247,7 +247,7 @@ export function ToastHost() {
   if (!items.length) return null
   const icons = { ok: <CheckCircle2 size={15} className="text-ok" />, danger: <XCircle size={15} className="text-danger" />, accent: <Info size={15} className="text-accent-600" /> }
   return createPortal(
-    <div className="fixed bottom-5 right-5 z-[60] flex w-80 flex-col gap-2" aria-live="polite">
+    <div className="pointer-events-none fixed bottom-5 right-5 z-[60] flex w-80 flex-col gap-2" aria-live="polite">
       {items.map(item => <div key={item.id} className="flex items-start gap-2 rounded-md border border-line bg-paper-raised px-3.5 py-2.5 text-body text-ink shadow-pop anim-slide-right">{icons[item.tone]}<span className="min-w-0 break-words">{item.message}</span></div>)}
     </div>,
     document.body,
@@ -258,7 +258,7 @@ export function ToastHost() {
 
 export function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return <div className="flex items-center justify-between gap-2">
-    <h3 className="text-[13px] font-semibold uppercase tracking-wide text-ink-faint">{children}</h3>
+    <h3 className="text-[0.8125rem] font-semibold uppercase tracking-wide text-ink-faint">{children}</h3>
     {action}
   </div>
 }

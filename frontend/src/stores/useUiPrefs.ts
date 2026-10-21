@@ -22,19 +22,19 @@ export const useUiPrefs = create<UiPrefs>()(persist((set) => ({
   setTextFormat: (textFormat) => set({ textFormat }),
   navCollapsed: false,
   readerMode: 'read',
-  readerFontSize: 18,
+  readerFontSize: 22,
   readerShowChapters: true,
   readerShowContext: true,
   toggleNav: () => set(state => ({ navCollapsed: !state.navCollapsed })),
   setReaderMode: (readerMode) => set({ readerMode }),
-  setReaderFontSize: (readerFontSize) => set({ readerFontSize: Math.max(14, Math.min(22, readerFontSize)) }),
+  setReaderFontSize: (readerFontSize) => set({ readerFontSize: Math.max(16, Math.min(32, readerFontSize)) }),
   toggleReaderChapters: () => set(state => ({ readerShowChapters: !state.readerShowChapters })),
   toggleReaderContext: () => set(state => ({ readerShowContext: !state.readerShowContext })),
 }), {
   name: 'noveltools-ui-prefs',
-  version: 1,
+  version: 2,
   migrate: (persisted) => {
     const saved = persisted as Partial<UiPrefs>
-    return { ...saved, readerFontSize: saved.readerFontSize === 17 ? 18 : saved.readerFontSize ?? 18 }
+    return { ...saved, readerFontSize: !saved.readerFontSize || [17, 18].includes(saved.readerFontSize) ? 22 : saved.readerFontSize }
   },
 }))

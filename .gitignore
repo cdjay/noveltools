@@ -39,3 +39,8 @@ data/logs/
 /frontend/vite.config.js
 /frontend/vite.config.d.ts
 /design-review/
+
+# Local browser traces and workflow backups
+.playwright-mcp/
+backups/
+

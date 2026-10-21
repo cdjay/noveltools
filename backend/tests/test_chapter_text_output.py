@@ -23,22 +23,10 @@ def test_generated_body_normalizes_indent_and_blank_lines_idempotently():
     ('雨夜来客\n正文第一段。\n正文第二段。', ('雨夜来客', '　　正文第一段。\n\n　　正文第二段。')),
 ])
 def test_plain_chapter_title_and_body_are_extracted_without_json(monkeypatch, raw, expected):
-    original = httpx.AsyncClient
-    def respond(request):
-        payload = json.loads(request.content)
-        assert 'response_format' not in payload
-        assert 'JSON' not in payload['messages'][0]['content']
-        return httpx.Response(200, json={'choices': [{'message': {'content': raw}, 'finish_reason': 'stop'}]})
-    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(respond)))
-    provider = LLMProvider(model='gemini-test', base_url='https://test.invalid/v1', api_key='test', temperature=1, max_tokens=65536, timeout=1800)
-    assert asyncio.run(writing.generate_chapter(provider, {'next_chapter_number': 20})) == expected
+    assert writing.parse_chapter_text(raw) == expected
 
 
 @pytest.mark.parametrize('raw', ['第20章 雨夜来客', '第20章\n正文', '   ', '标题\n\n', '{"title":"","content":"正文"}'])
 def test_missing_title_or_body_is_rejected(monkeypatch, raw):
-    original = httpx.AsyncClient
-    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(
-        lambda request: httpx.Response(200, json={'choices': [{'message': {'content': raw}, 'finish_reason': 'stop'}]}))))
-    provider = LLMProvider(model='gemini-test', base_url='https://test.invalid/v1', api_key='test', temperature=1, max_tokens=65536, timeout=1800)
     with pytest.raises(ValueError):
-        asyncio.run(writing.generate_chapter(provider, {}))
+        writing.parse_chapter_text(raw)

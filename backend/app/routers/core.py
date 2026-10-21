@@ -205,6 +205,7 @@ def create_version(chapter_id: int, payload: VersionCreate, db: Session = Depend
     db.flush()
     chapter.current_version_id = version.id
     chapter.word_count = version.word_count
+    chapter.status = 'draft'
     if payload.title is not None:
         chapter.title = payload.title
     db.commit()
@@ -347,7 +348,7 @@ async def test_provider(provider_id: int, db: Session = Depends(get_db)):
         return {"ok": False, "message": "未填写 API Key，请先保存密钥再测试连接。"}
     try:
         async with httpx.AsyncClient(timeout=llm_timeout(item.timeout)) as client:
-            response = await client.post(item.base_url.rstrip("/") + "/chat/completions", headers={"Authorization": f"Bearer {item.api_key}"}, json={"model": item.model, "messages": [{"role": "user", "content": "请只回复：连接成功"}], "max_tokens": 10})
+            response = await client.post(item.base_url.rstrip("/") + "/chat/completions", headers={"Authorization": f"Bearer {item.api_key}"}, json={"model": item.model, "messages": [{"role": "user", "content": "请只回复：连接成功"}], "temperature": item.temperature, "max_tokens": 10})
             response.raise_for_status()
         return {"ok": True, "message": "连接成功"}
     except Exception as exc:

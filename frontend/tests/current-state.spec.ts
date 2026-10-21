@@ -93,7 +93,7 @@ test('本书写作规则选择保存后显示来源并在重新进入时保留',
     await checkbox.check()
     await page.getByRole('button', { name: '保存提示词', exact: true }).click()
     await expect(page.getByRole('button', { name: '保存提示词', exact: true })).toBeDisabled()
-    expect((await (await request.get(base + '/settings')).json()).writing_rule_keys).toEqual([rule.material_key])
+    await expect.poll(async () => (await (await request.get(base + '/settings')).json()).writing_rule_keys).toEqual([rule.material_key])
     await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click()
     await expect(page.getByText('写作规则：AI写作禁令skill v1', { exact: false })).toBeVisible()
     await page.reload()

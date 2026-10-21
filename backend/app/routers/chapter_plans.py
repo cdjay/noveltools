@@ -48,7 +48,7 @@ def create_blank_chapter(book_id: int, plan_id: str, payload: PlanBase, db: Sess
     p = require_plan(db, book_id, plan_id, payload.base_version_id)
     v = db.get(ChapterPlanVersion, p.current_version_id)
     if p.chapter_id:
-        raise HTTPException(409, "此章纲已经绑定正文，请打开已有正文；如需更换，请手动绑定。")
+        return plan_out(db, p)
     existing = db.scalar(select(Chapter).where(Chapter.book_id == book_id,
         (Chapter.chapter_number == p.position) | (Chapter.title == v.title)))
     if existing:
@@ -147,6 +147,10 @@ def add_version(db, p, fields, source='manual', note=''):
                            source=source, note=note, **fields)
     db.add(v); db.flush()
     p.current_version_id = v.id
+    if p.chapter_id:
+        chapter = db.get(Chapter, p.chapter_id)
+        if chapter:
+            chapter.status = 'draft'
     db.flush()
     return v
 
@@ -266,6 +270,9 @@ def review(book_id: int, plan_id: str, payload: Review, db: Session = Depends(ge
         raise HTTPException(409, "正文版本已变化或尚未关联，请重新核对")
     p.reviewed_plan_version_id = p.current_version_id
     p.reviewed_chapter_version_id = chapter.current_version_id
+    if not chapter.word_count:
+        raise HTTPException(409, "本章正文为空，请先生成或保存正文。")
+    chapter.status = 'approved'
     db.commit()
     return plan_out(db, p)
 

@@ -132,13 +132,16 @@ def test_confirmed_plan_can_generate_first_body_and_pin_source(monkeypatch):
     bid = start_book(); p = create(bid)
     assert client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 1}).status_code == 409
     p = save(bid, p, status='confirmed').json()
-    calls = mock(monkeypatch)
+    from test_writing_jobs import remote, start, pump
+    calls, _, _ = remote(monkeypatch, bid)
     job = client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 1}).json()
-    done = run(job)
+    with SessionLocal.begin() as db:
+        db.get(WritingJob, job['id']).status = 'running'
+    done = pump(job['id'])
     assert done['status'] == 'completed', done
-    assert calls[0]['chapter_plan']['plan_id'] == p['id']
-    assert calls[0]['chapter_plan']['id'] == p['version']['id']
-    assert calls[0]['recent_chapters'] == []
+    source = client.get('/api/workflow-writing/jobs/' + calls[0]['inputOverrides']['book']['sourceRequestId'] + '/source').json()
+    assert '找到退路' in source['bookOutputs']['planText']
+    assert source['bookOutputs']['previousText'] == '无前文（第一章）'
     linked = client.get(f"{base(bid)}/{p['id']}").json()
     assert linked['chapter_id'] and linked['uses'][0]['plan_version_id'] == p['version']['id']
     assert linked['needs_review']  # Generation alone is not a semantic audit.
@@ -157,10 +160,23 @@ def test_confirmed_plan_can_generate_first_body_and_pin_source(monkeypatch):
 
 def test_changed_plan_during_generation_never_saves_stale_body(monkeypatch):
     bid = start_book(); p = create(bid, status='confirmed')
-    mock(monkeypatch, lambda ctx: save(bid, p, content='生成期间已修改'))
-    job = client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 1}).json()
-    assert run(job)['status'] == 'failed'
-    assert client.get(f'/api/books/{bid}').json()['chapter_count'] == 0
+    from test_writing_jobs import remote, start, status
+    from app.routers import canvas_writing as cw
+    remote(monkeypatch, bid)
+    jid = start(bid)
+    asyncio.run(writing.tick(jid))
+    child_id = status(jid)['items'][0]['child_id']
+    asyncio.run(cw.tick(child_id))
+    assert save(bid, p, content='生成期间已修改').status_code == 200
+    import pytest
+    with pytest.raises(Exception, match='变化'):
+        asyncio.run(cw.tick(child_id))
+    chapters = client.get(f'/api/books/{bid}/chapters').json()
+    assert len(chapters) == 1 and not chapters[0]['current_content']
+    with SessionLocal.begin() as db:
+        db.get(WritingJob, jid).status = 'failed'
+        from app.models import CanvasWritingJob
+        db.get(CanvasWritingJob, child_id).status = 'conflict'
 
 
 def test_draft_is_not_skipped_and_batch_requires_contiguous_confirmations():

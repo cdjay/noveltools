@@ -68,13 +68,14 @@ test('工作入口包含独立速查页，大纲全文可保存、查看历史�
 })
 
 test('正文保存和历史可用，移除分析入口，失败保存不会切走章节', async ({ page, request }, testInfo) => {
+  await page.setViewportSize({width: 1920, height: 1080})
   const book = await (await request.post(`${api}/books`, { data: { title: '正文验收' } })).json()
   const other = await (await request.post(`${api}/books`, { data: { title: '另一本正文' } })).json()
   try {
     const chapter = await (await request.post(`${api}/books/${book.id}/chapters`, { data: { title: '开端', content: '原始正文。' } })).json()
     await request.post(`${api}/books/${book.id}/chapters`, { data: { title: '第二章', content: '另一章内容。' } })
     await request.post(`${api}/books/${other.id}/chapters`, { data: { title: '另一部小说', content: '独立的正文。' } })
-    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.setViewportSize({ width: 1920, height: 1080 })
     await page.goto(`/books/${book.id}/reader`)
     await page.getByRole('button', { name: '编辑', exact: true }).click()
     const editor = page.getByRole('textbox', { name: '章节正文' })

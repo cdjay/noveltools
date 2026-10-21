@@ -1,199 +1,339 @@
+"""Continuous writing uses saved canvases, real checkpoints and a bounded decision loop."""
 import asyncio
+import copy
 import json
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
-
-from app.database import SessionLocal
+from sqlalchemy import delete, select
 from app.main import app
-from app.models import LLMModuleRoute, LLMProvider, WritingJob, CurrentStateLease
-from app.routers import writing_jobs as writing
+from app.database import SessionLocal
+from app.models import WritingJob, WritingJobItem, CanvasWritingJob, Chapter, ChapterVersion
+from app.routers import writing_jobs as writing, canvas_writing as cw, chapter_review as cr, continuous_writing as cont
+from app.automation_review import CONTROL_NODE, OPEN, CLOSE, DIMENSIONS, parse_decision, ensure_control
 
 client = TestClient(app)
 
 
-def test_model_reported_conflict_is_not_saved_as_a_chapter():
-    with pytest.raises(ValueError, match="资料冲突"):
-        writing.parse_chapter_text("资料冲突：第17章销毁物资\n速查却记为库存，需先核对。")
-
-
 @pytest.fixture(autouse=True)
-def isolate():
-    with SessionLocal.begin() as db:
-        db.execute(delete(WritingJob)); db.execute(delete(LLMModuleRoute)); db.execute(delete(LLMProvider))
+def cleanup():
     yield
     with SessionLocal.begin() as db:
-        db.execute(delete(WritingJob)); db.execute(delete(LLMModuleRoute))
+        db.execute(delete(CanvasWritingJob)); db.execute(delete(WritingJobItem)); db.execute(delete(WritingJob))
 
 
-def setup(count=1):
-    client.post('/api/llm/providers', json={'provider_name': '整理', 'base_url': 'https://organizer.invalid/v1', 'model': 'organizer', 'api_key': 'secret', 'enabled': True})
-    gemini = client.post('/api/llm/providers', json={'provider_name': '写作', 'base_url': 'https://gemini.invalid/v1', 'model': 'gemini-test', 'api_key': 'secret-gemini', 'enabled': False, 'timeout': 3600}).json()
-    book = client.post('/api/books', json={'title': '连续写作测试'}).json()
-    bid = book['id']
-    chapter = client.post(f'/api/books/{bid}/chapters', json={'title': '开端', 'content': '第一章已发生的正文'}).json()
-    outline = client.post(f'/api/books/{bid}/outline/versions', json={'content': '未来大纲全文', 'base_version_id': None}).json()
-    response = client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': count})
-    assert response.status_code == 200, response.text
-    return bid, chapter, outline, response.json(), gemini
+def setup(total=1, existing=0):
+    bid = client.post('/api/books', json={'title': '连续工作流测试'}).json()['id']
+    client.post(f'/api/books/{bid}/outline/versions', json={'content': '依次执行本章目标，不提前执行未来计划', 'base_version_id': None})
+    plans = []
+    for n in range(1, total + 1):
+        plans.append(client.post(f'/api/books/{bid}/chapter-plans', json={'title': f'目标{n}', 'content': f'第{n}章的目标', 'status': 'confirmed'}).json())
+        if n <= existing:
+            client.post(f'/api/books/{bid}/chapters', json={'title': f'已写{n}', 'content': f'已发生的第{n}章正文'})
+    return bid, plans
 
 
-def mock_models(monkeypatch, before=None):
-    original = httpx.AsyncClient
-    calls = []
-    def respond(request):
-        body = json.loads(request.content)
-        context = json.loads(body['messages'][1]['content'])
-        kind = 'writing' if body['model'] == 'gemini-test' else 'state' if 'recent_chapters' in context else 'summary'
-        calls.append((kind, context))
-        if before:
-            result = before(kind, context)
-            if result is not None:
-                return result
-        if kind == 'writing':
-            assert request.url.host == 'gemini.invalid'
-            assert request.extensions['timeout']['read'] == 3600
-            assert set(context) == {'book_title', 'next_chapter_number', 'current_state', 'outline', 'recent_chapters', 'all_summaries', 'writing_rules'}
-            assert context['outline']['content'] == '未来大纲全文'
-            text = f"第{context['next_chapter_number']}章 新的相遇{context['next_chapter_number']}\n\n完整正文\n角色开始新的行动。"
-        else:
-            text = '## 当前进度\n已核对正文的资料'
-        return httpx.Response(200, json={'choices': [{'message': {'content': text}, 'finish_reason': 'stop'}]})
-    monkeypatch.setattr(writing.httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(respond)))
-    return calls
+def report(stage, version, action='continue', **extra):
+    value = dict(version=1, stage=stage, source_version_id=version, action=action, reason='已按正文证据核对',
+                 needs_author=False, impact='none', checked_dimensions=sorted(DIMENSIONS), issues=[], resolved_ids=[])
+    value.update(extra)
+    return '主编意见 M1：有依据的判断。' + OPEN + json.dumps(value, ensure_ascii=False) + CLOSE
 
 
-def run(job):
-    with SessionLocal.begin() as db:
-        db.get(WritingJob, job['id']).status = 'running'
-    asyncio.run(writing.run_job(job['id']))
-    return client.get(f"/api/writing-jobs/{job['id']}").json()
+def issue(n=1):
+    return dict(id=f'M{n}', certainty='confirmed', blocking=True, auto_fixable=True, evidence=f'第{n}处的原句', description='局部确定问题')
 
 
-def test_full_loop_repairs_sources_saves_separate_title_and_finishes_final_archive(monkeypatch):
-    bid, _, _, job, gemini = setup(3)
-    routes = client.get('/api/llm/routes').json()
-    assert next(r for r in routes if r['module'] == 'chapter_writing')['effective_provider']['id'] == gemini['id']
-    assert client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 100}).json()['id'] == job['id']
-    calls = mock_models(monkeypatch)
-    result = run(job)
-    assert result['status'] == 'completed', result
-    assert result['completed_count'] == result['saved_count'] == 3
-    assert [kind for kind, _ in calls] == ['summary', 'state', 'writing', 'summary', 'state', 'writing', 'summary', 'state', 'writing', 'summary', 'state']
-    chapters = client.get(f'/api/books/{bid}/chapters').json()
-    assert len(chapters) == 4
-    assert [c['chapter_number'] for c in chapters] == [1, 2, 3, 4]
-    assert chapters[-1]['title'] == '新的相遇4'
-    assert chapters[-1]['current_content'] == '　　完整正文\n\n　　角色开始新的行动。'
-    assert all(c['summary'] and not c['summary_is_stale'] for c in chapters)
-    assert not client.get(f'/api/books/{bid}/current-state').json()['is_stale']
-    asyncio.run(writing.run_job(job['id']))
-    assert len(calls) == 11
-    assert client.post(f"/api/writing-jobs/{job['id']}/resume").status_code == 409
-    assert 'secret' not in client.get(f"/api/writing-jobs/{job['id']}").text
+def remote(monkeypatch, bid, decisions=None, model_response=None):
+    submissions, graphs, memory = [], {}, []
+    decisions = decisions or []
     with SessionLocal() as db:
-        assert 'api_key' not in json.dumps(db.get(WritingJob, job['id']).providers)
+        generate_id = cw.get_workflow_settings(bid, db)['workflow_id']
+    for kind, wid in [('generate', generate_id), ('review', cr.settings.review_workflow_id), ('revision', cr.settings.revision_workflow_id)]:
+        nodes = [{'id': 'book', 'type': 'chapter-context', 'inputs': {'bookId': str(bid), 'requireReader': kind == 'generate', 'previousCount': 5, 'includeOutline': True, 'includeChapterPlans': True}}]
+        if kind == 'revision':
+            nodes += [{'id': key, 'type': 'text', 'inputs': {'text': ''}} for key in ['editorial-opinions', 'accepted-decisions']]
+            nodes += [{'id': 'revision-assembled', 'type': 'revision-apply', 'inputs': {}}]
+        nodes += [{'id': 'final-prose' if kind == 'generate' else 'final-review-llm' if kind == 'review' else 'revision-check', 'type': 'llm', 'inputs': {'model': 'gemini-test', 'prompt': {'kind': 'prompt-template', 'parts': [{'type': 'text', 'text': '原工作流提示词'}]}}}]
+        graphs[wid] = dict(id=wid, name=kind, nodes=nodes, edges=[])
+    async def canvas(method, path, **kw):
+        if path.startswith('/workflows/'):
+            wid = path.split('/')[-1]
+            if method == 'PUT':
+                assert kw['headers']['If-Match'] == '"original"'
+                graphs[wid] = kw['json']
+            return httpx.Response(200, json=graphs[wid], headers={'etag': '"frozen"' if any(n['id'] == CONTROL_NODE for n in graphs[wid]['nodes']) else '"original"'})
+        if path == '/runs':
+            submissions.append(kw['json'])
+            return httpx.Response(201, json={'id': f'run-{len(submissions)}'})
+        if path.startswith('/runs/'):
+            submitted = submissions[int(path.split('-')[-1]) - 1]
+            jid = submitted['inputOverrides']['book']['sourceRequestId']
+            with SessionLocal() as db:
+                child = db.get(CanvasWritingJob, jid)
+                kind = child.config.get('kind', 'generate')
+                n = db.get(Chapter, child.chapter_id).chapter_number
+                version = child.base_version_id
+            if kind == 'generate':
+                nodes = [{'nodeId': 'final-prose', 'status': 'SUCCEEDED', 'outputs': {'text': f'第{n}章 目标{n}\n初稿第{n}章，主角推门。'}}]
+            else:
+                assert CONTROL_NODE in submitted['inputOverrides']
+                stage = 'review' if kind == 'review' else 'check'
+                chosen = decisions.pop(0) if decisions else {}
+                raw = chosen if isinstance(chosen, str) else report(stage, version, **chosen)
+                nodes = [{'nodeId': 'final-review-llm' if kind == 'review' else 'revision-check', 'status': 'SUCCEEDED', 'outputs': {'text': raw}}]
+                if kind == 'revision':
+                    assert '可选建议仅在收益明确' not in submitted['inputOverrides']['accepted-decisions']['text']
+                    nodes += [{'nodeId': 'revision-assembled', 'status': 'SUCCEEDED', 'outputs': {'text': f'第{n}章 目标{n}\n修订稿{len(submissions)}，主角推开门。'}}]
+            return httpx.Response(200, json={'status': 'SUCCEEDED', 'nodes': nodes})
+        raise AssertionError((method, path))
+    monkeypatch.setattr(cw, 'canvas', canvas)
+    # The context refresh still uses its normal persistence/provenance checks, with model I/O stubbed.
+    client.post('/api/llm/providers', json={'provider_name': '测试整理', 'model': 'memory-test', 'base_url': 'https://memory.invalid/v1', 'api_key': 'test', 'enabled': True})
+    original = httpx.AsyncClient
+    def model(request):
+        payload = json.loads(request.content)
+        memory.append(payload)
+        if model_response:
+            return model_response(payload)
+        return httpx.Response(200, json={'choices': [{'message': {'content': '已依据最终正文整理的梗概与当前状态'}, 'finish_reason': 'stop'}]})
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(**kw, transport=httpx.MockTransport(model)))
+    return submissions, graphs, memory
 
 
-def test_stop_after_writing_and_resume_only_archives_without_duplicate_chapter(monkeypatch):
-    bid, _, _, job, _ = setup()
-    def stop(kind, context):
-        if kind == 'writing':
-            client.post(f"/api/writing-jobs/{job['id']}/cancel")
-    calls = mock_models(monkeypatch, stop)
-    stopped = run(job)
-    assert stopped['status'] == 'cancelled' and stopped['saved_count'] == 1 and stopped['completed_count'] == 0
-    assert client.post(f"/api/writing-jobs/{job['id']}/resume").status_code == 200
-    complete = run(job)
-    assert complete['status'] == 'completed' and complete['completed_count'] == 1
-    assert sum(kind == 'writing' for kind, _ in calls) == 1
-    assert len(client.get(f'/api/books/{bid}/chapters').json()) == 2
+def start(bid, **payload):
+    r = client.post(f'/api/books/{bid}/writing-jobs', json=payload or {'chapter_count': 1})
+    assert r.status_code == 200, r.text
+    with SessionLocal.begin() as db:
+        db.get(WritingJob, r.json()['id']).status = 'running'
+    return r.json()['id']
 
 
-def test_summary_failure_after_save_resume_and_restart_keep_checkpoint(monkeypatch):
-    bid, _, _, job, _ = setup()
-    fail = {'enabled': True}
-    def respond(kind, context):
-        if kind == 'summary' and context['title'].startswith('新的相遇') and fail['enabled']:
-            return httpx.Response(429, json={'error': {'message': 'rate limit exceeded'}})
-    calls = mock_models(monkeypatch, respond)
-    failed = run(job)
-    assert failed['status'] == 'failed' and failed['saved_count'] == 1 and failed['completed_count'] == 0
-    assert len(client.get(f'/api/books/{bid}/chapters').json()) == 2
-    assert client.post(f"/api/writing-jobs/{job['id']}/resume").status_code == 200
-    writing.recover_interrupted()
-    assert client.get(f"/api/writing-jobs/{job['id']}").json()['status'] == 'interrupted'
-    fail['enabled'] = False
-    assert client.post(f"/api/writing-jobs/{job['id']}/resume").status_code == 200
-    assert run(job)['status'] == 'completed'
-    assert sum(kind == 'writing' for kind, _ in calls) == 1
+def status(jid):
+    return client.get(f'/api/writing-jobs/{jid}').json()
 
 
-@pytest.mark.parametrize('invalid', ['bad-json', 'empty-title', 'truncated', 'source-race'])
-def test_invalid_output_or_changed_sources_never_create_chapter(monkeypatch, invalid):
-    bid, chapter, outline, job, _ = setup()
-    def bad(kind, context):
-        if kind != 'writing':
-            return
-        if invalid == 'source-race':
-            client.post(f'/api/books/{bid}/outline/versions', json={'content': '生成期间新的大纲', 'base_version_id': outline['id']})
-            return
-        text = '只有文字，没有结构' if invalid == 'bad-json' else json.dumps({'title': '', 'content': '正文'})
-        return httpx.Response(200, json={'choices': [{'message': {'content': text}, 'finish_reason': 'length' if invalid == 'truncated' else 'stop'}]})
-    mock_models(monkeypatch, bad)
-    failed = run(job)
-    assert failed['status'] == 'failed' and failed['saved_count'] == 0
+def pump(jid, steps=100):
+    async def run():
+        for _ in range(steps):
+            more = await writing.tick(jid)
+            with SessionLocal() as db:
+                ids = list(db.scalars(select(CanvasWritingJob.id).where(CanvasWritingJob.config['continuous_job_id'].as_integer() == jid, CanvasWritingJob.status.in_(cw.ACTIVE))))
+            for child_id in ids:
+                await cw.tick(child_id)
+            if not more:
+                break
+    asyncio.run(run())
+    return status(jid)
+
+
+def test_first_pass_stops_at_one_review_and_uses_saved_workflows(monkeypatch):
+    bid, plans = setup(); calls, graphs, memory = remote(monkeypatch, bid)
+    jid = start(bid)
+    done = pump(jid)
+    assert done['status'] == 'completed', done
+    assert done['items'][0]['review_count'] == 1 and done['items'][0]['revision_count'] == 0
+    assert [x['workflowId'] for x in calls] == [done['workflows']['generate']['id'], cr.settings.review_workflow_id]
+    assert not memory  # No first-chapter memory, no premature final archive.
+    assert client.get(f"/api/chapters/{done['items'][0]['chapter_id']}").json()['status'] == 'draft'
+    assert client.get(f'/api/books/{bid}/chapter-plans').json()['plans'][0]['version']['id'] == plans[0]['version']['id']
+    assert pump(jid)['completed_count'] == 1 and len(calls) == 2
+    assert 'api_key' not in json.dumps(done) and done['logs']
+
+
+@pytest.mark.parametrize('impact,expected', [('wording', 1), ('story', 2)])
+def test_revision_check_dynamically_selects_rereview(monkeypatch, impact, expected):
+    bid, _ = setup()
+    calls, _, _ = remote(monkeypatch, bid, [dict(action='revise', issues=[issue()]),
+        dict(action='continue' if impact == 'wording' else 'review', impact=impact, resolved_ids=['M1'])])
+    done = pump(start(bid))
+    assert done['status'] == 'completed', done
+    assert done['items'][0]['review_count'] == expected
+    assert done['items'][0]['revision_count'] == 1
+    assert sum(c['workflowId'] == cr.settings.revision_workflow_id for c in calls) == 1
+    assert all(c['expectedVersion'] == '"frozen"' for c in calls[1:])
+
+
+def test_three_review_cap_pauses_and_resume_requires_author_confirmation(monkeypatch):
+    bid, plans = setup(2)
+    decisions = []
+    for n in range(1, 4):
+        decisions += [dict(action='revise', issues=[issue(n)]), dict(action='review', impact='story', resolved_ids=[f'M{n}'])]
+    calls, _, _ = remote(monkeypatch, bid, decisions)
+    jid = start(bid, chapter_count=2)
+    paused = pump(jid)
+    assert paused['status'] == 'paused' and '3次' in paused['message'], paused
+    assert paused['items'][0]['review_count'] == paused['items'][0]['revision_count'] == 3
     assert len(client.get(f'/api/books/{bid}/chapters').json()) == 1
-    assert client.get(f"/api/chapters/{chapter['id']}").json()['current_content'] == chapter['current_content']
-
-
-def test_waits_for_existing_generation_can_stop_and_validates_count(monkeypatch):
-    bid, _, _, job, _ = setup()
-    assert client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 2}).status_code == 422
-    calls = mock_models(monkeypatch)
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 409
+    c = client.get(f"/api/chapters/{paused['items'][0]['chapter_id']}").json()
+    assert client.post(f"/api/chapters/{c['id']}/confirm", json={'base_version_id': c['current_version_id'], 'plan_version_id': plans[0]['version']['id']}).status_code == 200
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 200
     with SessionLocal.begin() as db:
-        db.get(WritingJob, job['id']).status = 'running'
-        db.add(CurrentStateLease(book_id=bid))
-    assert asyncio.run(writing.tick(job['id']))
-    assert client.get(f"/api/writing-jobs/{job['id']}").json()['step'] == 'waiting'
+        db.get(WritingJob, jid).status = 'running'
+    done = pump(jid)
+    assert done['status'] == 'completed' and done['completed_count'] == 2, done
+
+
+def test_target_twenty_after_four_means_sixteen_and_range_is_frozen(monkeypatch):
+    bid, plans = setup(20, 4); calls, _, _ = remote(monkeypatch, bid)
+    options = client.get(f'/api/books/{bid}/writing-jobs/options').json()
+    assert options['start_chapter'] == 5 and len(options['plans']) == 16
+    jid = start(bid, mode='through_plan', target_plan_id=plans[19]['id'])
+    j = status(jid)
+    assert (j['start_chapter'], j['end_chapter'], j['target_count'], j['review_limit']) == (5, 20, 16, 3)
+    assert [i['position'] for i in j['items']] == list(range(5, 21))
+    assert client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 100}).json()['id'] == jid
     assert not calls
-    client.post(f"/api/writing-jobs/{job['id']}/cancel")
-    assert not asyncio.run(writing.tick(job['id']))
-    assert client.get(f"/api/writing-jobs/{job['id']}").json()['status'] == 'cancelled'
+
+
+def test_multiple_chapters_refresh_memory_from_final_revision_before_next(monkeypatch):
+    bid, _ = setup(2)
+    calls, _, memory = remote(monkeypatch, bid, [dict(action='revise', issues=[issue()]), dict(action='continue', impact='wording', resolved_ids=['M1'])])
+    done = pump(start(bid, chapter_count=2))
+    assert done['status'] == 'completed', done
+    assert len(calls) == 5 and memory
+    chapters = client.get(f'/api/books/{bid}/chapters').json()
+    assert chapters[0]['summary_source_version_id'] == chapters[0]['current_version_id']
+    assert not chapters[1]['summary']
+    assert '修订稿' in json.dumps(memory, ensure_ascii=False)
+
+
+@pytest.mark.parametrize('decision', ['没有机器结论，但文字写着通过', dict(action='pause', needs_author=True), dict(action='revise', issues=[{**issue(), 'auto_fixable': False}])])
+def test_invalid_or_author_decisions_never_advance(monkeypatch, decision):
+    bid, _ = setup(2); calls, _, _ = remote(monkeypatch, bid, [decision])
+    jid = start(bid, chapter_count=2)
+    assert pump(jid)['status'] == 'paused'
+    assert len(calls) == 2
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 409
+
+
+def test_repeated_issue_stops_revision_loop(monkeypatch):
+    bid, _ = setup()
+    calls, _, _ = remote(monkeypatch, bid, [dict(action='revise', issues=[issue()]), dict(action='review', impact='story'), dict(action='revise', issues=[issue()])])
+    done = pump(start(bid))
+    assert done['status'] == 'paused' and '重复' in done['message']
+    assert len(calls) == 4
+
+
+def test_cancel_queued_child_resume_and_restart_do_not_duplicate(monkeypatch):
+    bid, _ = setup(); calls, _, _ = remote(monkeypatch, bid)
+    jid = start(bid)
+    asyncio.run(writing.tick(jid))
+    child_id = status(jid)['items'][0]['child_id']
+    writing.recover_interrupted()
+    asyncio.run(cw.tick(child_id))
+    assert not calls
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 200
+    with SessionLocal.begin() as db: db.get(WritingJob, jid).status = 'running'
+    assert client.post(f'/api/writing-jobs/{jid}/cancel').status_code == 200
+    assert pump(jid)['status'] == 'cancelled'
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 200
+    with SessionLocal.begin() as db: db.get(WritingJob, jid).status = 'running'
+    assert pump(jid)['status'] == 'completed'
+    assert len(calls) == 2 and len(client.get(f'/api/books/{bid}/chapters').json()) == 1
+
+
+def test_range_rejects_gaps_drafts_wrong_target_and_occupied_body(monkeypatch):
+    bid, plans = setup(3)
+    assert client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 4}).status_code == 409
+    assert client.post(f'/api/books/{bid}/writing-jobs', json={'mode': 'through_plan', 'target_plan_id': 'wrong'}).status_code == 409
+    client.post(f'/api/books/{bid}/chapters', json={'title': '已有第三章', 'chapter_number': 3, 'content': '正文'})
+    assert client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 3}).status_code == 409
+    assert client.post(f'/api/books/{bid}/writing-jobs', json={'mode': 'through_plan', 'target_plan_id': plans[1]['id'], 'chapter_count': 2}).status_code == 422
+
+
+def test_owned_blank_reused_and_single_workflow_mutex(monkeypatch):
+    bid, plans = setup(); calls, _, _ = remote(monkeypatch, bid)
+    blank = client.post(f"/api/books/{bid}/chapter-plans/{plans[0]['id']}/create-chapter", json={'base_version_id': plans[0]['version']['id']}).json()
+    single = client.post(f"/api/chapters/{blank['chapter_id']}/workflow-writing", json={'base_version_id': blank['chapter_version_id']}).json()
+    assert client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 1}).status_code == 409
+    with SessionLocal() as db:
+        asyncio.run(cw.cancel(single['id'], db))
+    done = pump(start(bid, chapter_count=1, review_limit=0))
+    assert done['status'] == 'completed' and len(calls) == 1
+    assert done['items'][0]['chapter_id'] == blank['chapter_id']
+
+
+def test_decision_requires_version_all_dimensions_and_consistency():
+    assert parse_decision(report('review', 3), 'review', 3).action == 'continue'
+    for text in [report('review', 2), report('review', 3, checked_dimensions=[]), report('review', 3, issues=[issue()]), report('check', 3)]:
+        with pytest.raises(ValueError): parse_decision(text, 'review', 3)
+
+
+def test_control_input_keeps_template_and_exact_backup_and_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(cont.settings, 'data_dir', str(tmp_path))
+    graph = {'id': 'workflow', 'nodes': [{'id': 'final-review-llm', 'type': 'llm', 'inputs': {'prompt': {'kind': 'prompt-template', 'parts': [{'type': 'text', 'text': '原有完整提示词'}]}}}], 'edges': []}
+    original = copy.deepcopy(graph); puts = []
+    async def canvas(method, path, **kw):
+        puts.append(kw)
+        return httpx.Response(200, json=kw['json'], headers={'etag': '"new"'})
+    response = asyncio.run(ensure_control(canvas, httpx.Response(200, json=graph, headers={'etag': '"old"'}), 'final-review-llm'))
+    assert graph == original and puts[0]['headers']['If-Match'] == '"old"'
+    assert json.loads(next((tmp_path / 'workflow-backups').glob('*.json')).read_text(encoding='utf-8')) == original
+    assert asyncio.run(ensure_control(canvas, response, 'final-review-llm')) == response and len(puts) == 1
+
+
+def test_old_task_cannot_resume_direct_model_generation():
+    bid, _ = setup()
     with SessionLocal.begin() as db:
-        db.execute(delete(CurrentStateLease).where(CurrentStateLease.book_id == bid))
+        j = WritingJob(book_id=bid, target_count=1, providers={}, status='running'); db.add(j); db.flush(); jid=j.id
+    assert not asyncio.run(writing.tick(jid))
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 409
 
 
-def test_writing_receives_five_full_bodies_all_summaries_and_selected_rules(monkeypatch):
-    bid, first, _, job, _ = setup()
-    for number in range(2, 8):
-        client.post(f'/api/books/{bid}/chapters', json={'title': f'章{number}', 'content': f'第{number}章原文' + '完整保留。' * 1000})
-    rule = client.post(f'/api/books/{bid}/materials', json={'title': 'AI写作禁令skill', 'content': '不得用未来称呼。'}).json()
-    key = rule['material_key']
-    response = client.put(f'/api/books/{bid}/current-state/settings', json={'prompt': '只记事实', 'base_revision': 0, 'writing_rule_keys': [key]})
-    assert response.status_code == 200, response.text
-    calls = mock_models(monkeypatch)
-    assert run(job)['status'] == 'completed'
-    payload = next(context for kind, context in calls if kind == 'writing')
-    assert [c['chapter_number'] for c in payload['recent_chapters']] == [3, 4, 5, 6, 7]
-    assert payload['recent_chapters'][-1]['content'] == '第7章原文' + '完整保留。' * 1000
-    assert len(payload['all_summaries']) == 7
-    assert payload['writing_rules'][0]['content'] == '不得用未来称呼。'
-    assert payload['writing_rules'][0]['material_key'] == key
+
+def test_generation_submission_and_checkpoint_rollback_together(monkeypatch):
+    bid, _ = setup(); remote(monkeypatch, bid)
+    jid = start(bid)
+    original = cw.start_job
+    async def fail_after_create(*args, **kwargs):
+        await original(*args, **kwargs)
+        raise ValueError('提交前模拟故障')
+    monkeypatch.setattr(cw, 'start_job', fail_after_create)
+    with pytest.raises(ValueError): asyncio.run(writing.tick(jid))
+    assert client.get(f'/api/books/{bid}/chapters').json() == []
+    with SessionLocal() as db:
+        assert not db.scalar(select(CanvasWritingJob.id).where(CanvasWritingJob.book_id == bid))
+        assert not db.scalar(select(WritingJobItem).where(WritingJobItem.job_id == jid)).execution.get('child_id')
+    monkeypatch.setattr(cw, 'start_job', original)
+    assert pump(jid)['status'] == 'completed'
 
 
-def test_rule_change_during_writing_rejects_generated_chapter(monkeypatch):
-    bid, _, _, job, _ = setup()
-    rule = client.post(f'/api/books/{bid}/materials', json={'title': '规则', 'content': '原规则'}).json()
-    key = rule['material_key']
-    client.put(f'/api/books/{bid}/current-state/settings', json={'prompt': '只记事实', 'base_revision': 0, 'writing_rule_keys': [key]})
-    def change(kind, context):
-        if kind == 'writing':
-            result = client.post(f'/api/books/{bid}/materials/{key}/versions', json={'title': '规则改名', 'content': '新规则', 'base_version_id': rule['id']})
-            assert result.status_code == 200, result.text
-    mock_models(monkeypatch, change)
-    result = run(job)
-    assert result['status'] == 'failed' and result['saved_count'] == 0
-    assert '写作规则' in result['message']
+def test_unknown_submission_is_never_retried(monkeypatch):
+    bid, _ = setup(); calls, _, _ = remote(monkeypatch, bid)
+    jid = start(bid); asyncio.run(writing.tick(jid))
+    child_id = status(jid)['items'][0]['child_id']
+    with SessionLocal.begin() as db:
+        db.get(CanvasWritingJob, child_id).status = 'submitting'
+    cw.recover_interrupted()
+    assert pump(jid)['status'] == 'paused'
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 409
+    assert not calls
+
+
+def test_stop_after_saved_generation_resumes_review_without_regeneration(monkeypatch):
+    bid, _ = setup(); calls, _, _ = remote(monkeypatch, bid)
+    jid = start(bid); asyncio.run(writing.tick(jid))
+    child_id = status(jid)['items'][0]['child_id']
+    asyncio.run(cw.tick(child_id)); asyncio.run(cw.tick(child_id))
+    client.post(f'/api/writing-jobs/{jid}/cancel')
+    assert pump(jid)['status'] == 'cancelled'
+    assert client.post(f'/api/writing-jobs/{jid}/resume').status_code == 200
+    with SessionLocal.begin() as db: db.get(WritingJob, jid).status = 'running'
+    assert pump(jid)['status'] == 'completed' and len(calls) == 2
+
+
+def test_body_change_between_review_and_revision_pauses(monkeypatch):
+    bid, _ = setup(); calls, _, _ = remote(monkeypatch, bid, [dict(action='revise', issues=[issue()])])
+    jid = start(bid)
+    for _ in range(10):
+        pump(jid, steps=1)
+        j = status(jid)
+        if j['items'][0]['phase'] == 'revision': break
+    c = client.get(f"/api/chapters/{j['items'][0]['chapter_id']}").json()
+    client.post(f"/api/chapters/{c['id']}/versions", json={'base_version_id': c['current_version_id'], 'content': '作者刚保存的正文'})
+    assert pump(jid)['status'] == 'paused'
+    assert len(calls) == 2
+    assert client.get(f"/api/chapters/{c['id']}").json()['current_content'] == '作者刚保存的正文'

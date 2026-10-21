@@ -101,11 +101,12 @@ def test_no_fallback_stops_and_never_borrows_another_modules_backup(monkeypatch)
     calls = mock_http(monkeypatch, lambda p: httpx.Response(429, json={'error': {'message': 'limited'}}))
     bid, _ = book()
     assert client.post(f'/api/books/{bid}/current-state/generate', json={'base_version_id': None}).status_code == 502
-    job = client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 1}).json()
+    from app.llm_failover import snapshot_chain
     with SessionLocal() as db:
-        saved = db.get(WritingJob, job['id']).providers
-        assert saved['chapter_writing']['id'] == gemini['id'] and saved['chapter_writing']['fallbacks'] == []
-        assert saved['batch_summary']['fallbacks'] == []
+        saved = snapshot_chain(db, 'batch_summary')
+        assert saved['fallbacks'] == []
+        assert snapshot_chain(db, 'chapter_writing')['id'] == gemini['id']
+        assert snapshot_chain(db, 'chapter_writing')['fallbacks'] == []
     assert [c[0]['model'] for c in calls] == ['k3']
 
 
@@ -205,39 +206,28 @@ def test_route_validation_and_legacy_clients_preserve_backups():
     assert route('chapter_summary', main, revision=2).json()['fallbacks'] == []
 
 
-def test_writing_workflow_uses_module_backups_but_keeps_gemini_and_checkpoint(monkeypatch):
+def test_continuous_canvas_memory_uses_frozen_module_backups(monkeypatch):
+    from test_writing_jobs import setup, remote, start, pump
     main, summaries, states = provider('k3', True), provider('summaries'), provider('states')
-    gemini = provider('gemini-test')
     route('batch_summary', main, summaries)
     route('current_state', main, states)
-    fail_gemini = [True]
+    bid, _ = setup(2, 1)
     def response(payload):
-        if payload['model'] == 'k3' or (payload['model'] == 'gemini-test' and fail_gemini[0]):
+        if payload['model'] == 'k3':
             return httpx.Response(429, json={'error': {'message': 'usage limit'}})
-        if payload['model'] == 'gemini-test':
-            return text_response(json.dumps({'title': '新章标题', 'content': '新章完整正文'}))
         return text_response()
-    calls = mock_http(monkeypatch, response)
-    bid, _ = book()
-    job = client.post(f'/api/books/{bid}/writing-jobs', json={'chapter_count': 1}).json()
-    def run():
-        with SessionLocal.begin() as db:
-            db.get(WritingJob, job['id']).status = 'running'
-        asyncio.run(writing_jobs.run_job(job['id']))
-        return client.get(f"/api/writing-jobs/{job['id']}").json()
-    failed = run()
-    assert failed['status'] == 'failed' and failed['step'] == 'writing' and failed['saved_count'] == 0
-    assert [c[0]['model'] for c in calls] == ['k3', 'summaries', 'states', 'gemini-test']
-    assert any('summaries' in event['text'] for event in failed['failover_events'])
-    assert 'secret' not in json.dumps(failed)
-    fail_gemini[0] = False
-    assert client.post(f"/api/writing-jobs/{job['id']}/resume").status_code == 200
-    complete = run()
-    assert complete['status'] == 'completed' and complete['completed_count'] == complete['saved_count'] == 1
+    calls, _, memory = remote(monkeypatch, bid, model_response=response)
+    jid = start(bid)
+    with SessionLocal() as db:
+        saved = db.get(WritingJob, jid).providers['workflows']['generate']['config']['continuous_memory']
+        assert saved['batch_summary']['fallbacks'][0]['id'] == summaries['id']
+        assert 'api_key' not in json.dumps(saved)
+    done = pump(jid)
+    assert done['status'] == 'completed', done
+    assert [m['model'] for m in memory] == ['k3', 'summaries', 'states']
+    assert len(calls) == 2
     chapters = client.get(f'/api/books/{bid}/chapters').json()
-    assert len(chapters) == 2 and chapters[-1]['summary_model'] == 'summaries'
-    assert client.get(f'/api/books/{bid}/current-state').json()['version']['model'] == 'states'
-    assert chapters[-1]['current_content'] == '　　新章完整正文'
+    assert chapters[0]['summary_model'] == 'summaries' and not chapters[1]['summary']
 
 
 def test_gemini_output_limit_explained_without_exposing_error_body():

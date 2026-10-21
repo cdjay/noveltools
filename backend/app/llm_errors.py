@@ -49,6 +49,12 @@ def llm_http_error(exc: httpx.HTTPStatusError, model: str) -> str:
                 "请按服务模型列表填写完整模型 ID，注意大小写，并核对密钥分组。")
     if exc.response.status_code == 404:
         return "LLM 返回 HTTP 404：未找到聊天接口或上游资源。请核对 Base URL 的路径及服务配置。"
+    if exc.response.status_code == 400:
+        for signal in signals:
+            if 'temperature' in signal and any(term in signal for term in (
+                    'only 1 is allowed', 'only the default (1) value is supported')):
+                return ('模型温度参数不兼容（HTTP 400）：当前模型只允许温度（temperature）为 1。'
+                        '请在 LLM 配置中将温度改为 1 并保存后重试；已有内容保留。')
     if exc.response.status_code == 429:
         evidence = ' '.join(signals)
         if any(term in evidence for term in ('insufficient_quota', 'quota_exceeded', 'insufficient balance',
